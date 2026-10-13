@@ -198,4 +198,3 @@ function isSupabaseServiceRoleJwt([token]) {
     return false;
   }
 }
-
