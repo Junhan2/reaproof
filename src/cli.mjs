@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { applyFix, planFix, undoLastFix } from './fix.mjs';
-import { MeasureError, measureWithRea } from './measure.mjs';
+import { MeasureError, measureWithRea, REA_PACKAGE } from './measure.mjs';
 import { isWebAddress, scanDeployedSite } from './remote.mjs';
 import { createReporter, pickLanguage } from './report.mjs';
 import { resolveTargets, scan, ScanError, withoutFiles } from './scan.mjs';
@@ -159,9 +159,24 @@ function runUndo(target, options, report, terminal) {
   return EXIT_OK;
 }
 
-function runMeasure(target, options, report, terminal) {
+async function runMeasure(target, options, report, terminal) {
   const root = toLocalRoot(target);
   const targets = resolveTargets(root);
+  // rea is someone else's program: it is downloaded and run only after a yes.
+  if (!options.yes) {
+    if (options.json) {
+      terminal.print(toJson({ needsApproval: true, downloadsAndRuns: REA_PACKAGE }));
+      return EXIT_USAGE;
+    }
+    if (!terminal.ask) {
+      terminal.printError(report.measureNeedsApproval(REA_PACKAGE));
+      return EXIT_USAGE;
+    }
+    if (!(await terminal.ask(report.measureQuestion(REA_PACKAGE)))) {
+      terminal.print(report.cancelled);
+      return EXIT_OK;
+    }
+  }
   if (!options.json) terminal.printError(report.measureNotice);
   const measurements = targets.map((measured) => ({ target: measured, ...measureWithRea(measured) }));
   if (options.json) {

@@ -6,7 +6,11 @@ export const SOURCE_MAP_RULES = new Set([...STANDALONE_MAP_RULES, 'sourcemap-inl
 
 // ECMA-426 section 11.1.2: generators emit `//#`, consumers also accept the legacy `//@`.
 // CSS carries the same annotation inside a block comment.
-const SOURCE_MAP_ANNOTATION = /(?:\/\/|\/\*)[#@]\s*sourceMappingURL=(\S+?)\s*(?:\*\/\s*)?$/gm;
+// The lookbehind skips an annotation that begins inside the unbroken run of an earlier one
+// written without spaces. That one reads to the same end, so starting again here can find
+// nothing new, and without the skip a run of repeated annotations is read once per repeat.
+const SOURCE_MAP_ANNOTATION =
+  /(?:\/\/|\/\*)[#@]\s*sourceMappingURL=(?<!(?:\/\/|\/\*)[#@]sourceMappingURL=\S*?(?:\/\/|\/\*)[#@]sourceMappingURL=)(\S+?)\s*(?:\*\/\s*)?$/gm;
 
 export function checkMapFile(path, text) {
   const summary = summarizeSourceMap(text);

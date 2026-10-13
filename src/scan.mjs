@@ -6,6 +6,7 @@ import { checkElectronFuses, electronBinaryIn } from './electron.mjs';
 import { checkEnvValues, readEnvSecrets } from './env.mjs';
 import { checkAppBundle, isAppBundleName } from './macos.mjs';
 import { archiveFinding, checkFile, checkPath, hasContentChecks, summarizeFindings } from './rules.mjs';
+import { toShown, toShownText } from './text.mjs';
 
 // Where common toolchains put what actually ships. For Next.js only `.next/static` reaches browsers.
 const KNOWN_OUTPUT_DIRS = ['.next/static', 'out', 'dist', 'build', 'release', '.output/public'];
@@ -55,10 +56,11 @@ export function resolveTargets(root) {
 /**
  * How a path is shown: relative to what the user pointed at, or by its own name when it is
  * that. Always written with `/`, like a path inside an archive or on a site, so a report
- * reads the same on every system and the name checks can split it.
+ * reads the same on every system and the name checks can split it. It is for showing only:
+ * a file name is written by whoever made the build, so it is cleaned on the way.
  */
 export function toDisplayPath(root, path) {
-  return (relative(root, path) || basename(path)).split(sep).join('/');
+  return toShownText((relative(root, path) || basename(path)).split(sep).join('/'));
 }
 
 /**
@@ -146,7 +148,7 @@ function scanArchive(archivePath, displayPath, state) {
     archive = openAsar(archivePath);
     addFindings(state, [archiveFinding(displayPath, archive.fileCount)], null);
     for (const inner of walk(archive.root, archive.list)) {
-      const innerDisplayPath = `${displayPath}:/${inner.path}`;
+      const innerDisplayPath = toShownText(`${displayPath}:/${inner.path}`);
       if (inner.isDirectory) {
         addFindings(state, checkStrayDirectory({ path: innerDisplayPath, name: inner.name }), null);
         continue;
@@ -178,8 +180,9 @@ function scanContent({ displayPath, extension, diskPath, bytes, readText }, stat
   addFindings(state, checkEnvValues(displayPath, text, state.envSecrets), diskPath);
 }
 
+/** Everything a finding quotes from a file is cleaned here; `diskPath` stays exact, for acting on the file. */
 function addFindings(state, findings, diskPath) {
-  for (const finding of findings) state.result.findings.push({ ...finding, diskPath });
+  for (const finding of findings) state.result.findings.push({ ...toShown(finding), diskPath });
 }
 
 /**

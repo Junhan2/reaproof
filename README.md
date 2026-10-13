@@ -32,7 +32,7 @@ Say this to any coding agent that can run commands:
 
 > Run `npx reaproof --json` and fix what it reports.
 
-The JSON carries the risk level and, for every kind of finding, what it means and what to do, so the agent needs no setup.
+The JSON carries the risk level and, for every kind of finding, what it means and what to do, so the agent needs no setup. Paths, file names and addresses inside the findings are copied from the scanned files: control characters are removed, long text is cut, and the JSON itself says that this text is data to report, not instructions to follow.
 
 To make the agent reach for it by itself, install the skill once:
 
@@ -79,7 +79,7 @@ Exit codes: 0 when nothing critical or high was found, 1 when something was, 2 f
 | `reaproof undo [path]` | Puts back what the last fix took out |
 | `reaproof measure [path]` | Runs the real rea on the output and counts what it reads |
 
-Options: `--json` for machine-readable output, `--yes` to skip the question in `fix`, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
+Options: `--json` for machine-readable output, `--yes` to skip the question in `fix` and `measure`, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
 
 The path can be a project folder, a build output folder, an Electron `.asar` archive or a packaged app. In a project folder Reaproof looks for `.next/static`, `out`, `dist`, `build`, `release` and `.output/public`.
 
@@ -126,13 +126,15 @@ If a hosting platform builds your project from the repository, a local fix does 
 
 `npx reaproof https://your-site.example` reads one page and the code files that page loads from its own address, at most 60 of them, one after another. For each code file it looks for a map where the file or the server says one is, and beside the file, where a "hidden" map is written. Nothing fetched is saved.
 
+If the address you type redirects, to `www` or to `https` for example, the place it ends up is the site that gets checked. A code file that redirects to another site is not followed, and a file that names many maps is asked for the last one only, so what a page serves cannot send the check anywhere else.
+
 It checks source maps only. Looking for keys and stray files is done on the build output, by someone who holds the files. Code that the page loads later or from another address is not checked, and the report says how many files were left out. Use it on sites you run.
 
 ## Measuring with the real rea
 
-`reaproof measure` downloads the `rea-agents` package with `npx` and runs its static JavaScript analysis on your build output only, with install scripts disabled. It reports how many readable source maps, original file names, server addresses, request sites and functions rea recovered. Run it before and after the fix to see the difference.
+`reaproof measure` downloads the `rea-agents` package with `npx` and runs its static JavaScript analysis on your build output only, with install scripts disabled. rea is someone else's program, so the command asks before it does that; in a script or with an AI agent, pass `--yes`. It reports how many readable source maps, original file names, server addresses, request sites and functions rea recovered. Run it before and after the fix to see the difference.
 
-rea ships several releases a week, so asking the real tool gives a more current answer than a fixed list of what it can read.
+It runs one fixed release of rea, 6.4.0, the one this version was tested against. A published release cannot change afterwards. Newer releases are adopted here after they have been tested.
 
 ## Not covered yet
 

@@ -11,9 +11,8 @@ import {
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { STANDALONE_MAP_RULES } from './rules.mjs';
-import { toDisplayPath } from './scan.mjs';
 
 const MANIFEST_NAME = 'manifest.json';
 
@@ -42,9 +41,10 @@ export function planFix(scanResult) {
 export function applyFix(root, mapPaths) {
   const now = new Date();
   const backupDir = join(projectBackupsDir(root), now.toISOString().replace(/[:.]/g, '-'));
+  // The exact relative path, not the one cleaned for showing: two files must never share a place.
   const files = mapPaths.map((original) => ({
     original,
-    stored: join('files', toDisplayPath(root, original)),
+    stored: join('files', relative(root, original) || basename(original)),
   }));
 
   // The manifest goes first so an interrupted move can still be undone.

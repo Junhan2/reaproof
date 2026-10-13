@@ -1,46 +1,62 @@
 import { spawnSync } from 'node:child_process';
+import { toShownText } from './text.mjs';
 
-const REA_PACKAGE = 'rea-agents@latest';
+// The release of rea this version was tested against. A published release cannot change
+// after the fact, and its result format is the one the count below reads.
+const REA_VERSION = '6.4.0';
+/** What `measure` downloads and runs; shown to the user before they agree to it. */
+export const REA_PACKAGE = `rea-agents@${REA_VERSION}`;
 const REA_TIMEOUT_MS = 15 * 60 * 1000;
 const REA_MAX_OUTPUT_BYTES = 1024 * 1024 * 1024;
+const UNSAFE_IN_WINDOWS_SHELL = /["%^&|<>!`\r\n]/;
 
 /** rea could not be run, or answered with something other than its analysis JSON. */
 export class MeasureError extends Error {}
 
-// Asked once per run: every `npx` start costs a registry lookup.
-let reaVersion;
-
 /**
  * Runs the real rea against one shipped directory or `.asar` and counts what it recovered.
- * rea ships several releases a week, so asking it directly ages better than a fixed
- * rulebook of what it can read.
+ * It is someone else's program, so the caller asks before calling this.
  *
  * @param {string} targetPath absolute path
  */
 export function measureWithRea(targetPath) {
-  reaVersion ??= runRea(['--version']).trim();
-  const output = runRea(['analyze-javascript-application', targetPath, '--json']);
+  const usesShell = process.platform === 'win32';
+  const shownToRea = usesShell ? toWindowsShellArgument(targetPath) : targetPath;
+  const output = runRea(['analyze-javascript-application', shownToRea, '--json'], usesShell);
   let evidence;
   try {
     evidence = JSON.parse(output);
   } catch {
     throw new MeasureError('rea did not return JSON');
   }
-  return { reaVersion, ...summarizeEvidence(evidence) };
+  return { reaVersion: REA_VERSION, ...summarizeEvidence(evidence) };
 }
 
-function runRea(args) {
+/**
+ * On Windows `npx` is a command file that only a shell can start, and a shell reads `&` or
+ * `|` inside an argument as the start of another command. The path goes in quotes, and a
+ * path that could get out of them is refused instead of escaped.
+ */
+export function toWindowsShellArgument(path) {
+  if (UNSAFE_IN_WINDOWS_SHELL.test(path)) {
+    throw new MeasureError(`this path has a character that is not safe to pass on: ${toShownText(path)}`);
+  }
+  // A backslash right before the closing quote would escape it, so a trailing run is doubled.
+  return `"${path.replace(/\\+$/, '$&$&')}"`;
+}
+
+function runRea(args, usesShell) {
   const result = spawnSync('npx', ['-y', REA_PACKAGE, ...args], {
     encoding: 'utf8',
     maxBuffer: REA_MAX_OUTPUT_BYTES,
     timeout: REA_TIMEOUT_MS,
     // rea's analysis runs without install scripts, so none are allowed to run.
     env: { ...process.env, npm_config_ignore_scripts: 'true' },
-    shell: process.platform === 'win32',
+    shell: usesShell,
   });
   if (result.error) throw new MeasureError(result.error.message);
   if (result.status !== 0) {
-    const lastLines = (result.stderr ?? '').trim().split('\n').slice(-3).join('\n');
+    const lastLines = (result.stderr ?? '').trim().split('\n').slice(-3).map(toShownText).join('\n');
     throw new MeasureError(`rea exited with status ${result.status}\n${lastLines}`);
   }
   return result.stdout;
@@ -60,12 +76,15 @@ function summarizeEvidence(evidence) {
       node.observations?.some((observation) => observation.properties?.available === false),
   ).length;
 
+  // Names and addresses come out of the build by way of rea, so they are cleaned like any other.
   const originalSources = ofKind(graphNodes, 'source-module')
     .map((node) => node.identity?.original_source)
-    .filter((source) => typeof source === 'string');
+    .filter((source) => typeof source === 'string')
+    .map(toShownText);
   const urls = ofKind(semanticNodes, 'literal')
     .map((node) => node.properties?.value)
-    .filter((value) => typeof value === 'string' && /^https?:\/\//.test(value));
+    .filter((value) => typeof value === 'string' && /^https?:\/\//.test(value))
+    .map(toShownText);
 
   return {
     readableSourceMaps: sourceMapNodes.length - danglingMapReferences,
