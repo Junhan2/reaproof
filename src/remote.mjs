@@ -1,7 +1,8 @@
+import { extname } from 'node:path';
 import { checkInlineMaps, checkMapFile, findMapReferences } from './checks/sourcemaps.mjs';
-import { summarizeFindings } from './rules.mjs';
-import { MAX_FILE_BYTES, ScanError, startResult } from './scan.mjs';
-import { toShown } from './text.mjs';
+import { isScript } from './rules.mjs';
+import { finishResult, MAX_FILE_BYTES, ScanError, startResult } from './scan.mjs';
+import { toShown, toShownText } from './text.mjs';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 // One page and its own files, read one after another: a check, not a crawl.
@@ -15,6 +16,9 @@ const USER_AGENT = 'reaproof (source map exposure check)';
 const SCRIPT_SOURCE = /<script\b[^>]{0,2000}?\bsrc\s*=\s*["']([^"']{1,2000})["']/gi;
 const LINK_TARGET = /<link\b[^>]{0,2000}?\bhref\s*=\s*["']([^"']{1,2000})["']/gi;
 const CODE_PATH = /\.(?:m?js|css)$/i;
+// Why a file of the site could not be used is the message of the error thrown for it: a
+// short code such as this one or 'HTTP 404'.
+const TOO_LARGE = 'TOO_LARGE';
 
 export function isWebAddress(input) {
   return /^https?:\/\//i.test(input);
@@ -31,18 +35,28 @@ export function isWebAddress(input) {
  * @param {string} pageAddress an http(s) address
  */
 export async function scanDeployedSite(pageAddress) {
-  const requested = toAddress(pageAddress);
-  if (!requested) throw new ScanError('page-unreachable', pageAddress);
-  const result = startResult({ root: requested.href, isDeployed: true, targets: [requested.href], frameworks: [] });
-  const html = await fetchText(requested, result.skippedLargeFiles, null);
-  if (!html) throw new ScanError('page-unreachable', pageAddress);
-
+  const html = await fetchPage(pageAddress);
   // A site may answer from another address than the one typed (www, https). That one is home.
   const page = html.address;
-  Object.assign(result, { root: page.href, targets: [page.href] });
-  // A file too large to read is put on the same list the local scan puts one on.
-  const read = (address) => fetchText(address, result.skippedLargeFiles, page.origin);
+  const result = startResult({
+    root: page.href,
+    isDeployed: true,
+    targets: [page.href],
+    targetsPickedByName: false,
+    frameworks: [],
+  });
+  // A file that is not there, or does not answer, is no finding. One too large to read is
+  // put on the same list the local scan puts one on.
+  const read = async (address) => {
+    try {
+      return await fetchText(address, page.origin);
+    } catch (error) {
+      if (error.message === TOO_LARGE) result.skippedLargeFiles.push(address.pathname);
+      return null;
+    }
+  };
   const { ownAssets, otherOriginCount } = listCodeAssets(html.text.slice(0, MAX_PAGE_CHARACTERS), page);
+  result.filesSeen = ownAssets.length;
   result.skippedOtherOrigins = otherOriginCount;
   const addFindings = (findings) => {
     for (const finding of findings) result.findings.push({ ...toShown(finding), diskPath: null });
@@ -53,6 +67,7 @@ export async function scanDeployedSite(pageAddress) {
     const code = await read(asset);
     if (!code) continue;
     result.filesScanned += 1;
+    if (isScript(extname(asset.pathname).toLowerCase())) result.scriptsScanned += 1;
     addFindings(checkInlineMaps(asset.pathname, code.text));
 
     for (const mapAddress of listMapCandidates(code)) {
@@ -63,7 +78,24 @@ export async function scanDeployedSite(pageAddress) {
       if (map) addFindings(checkMapFile(mapAddress.pathname, map.text));
     }
   }
-  return Object.assign(result, summarizeFindings(result.findings));
+  return finishResult(result);
+}
+
+/** The page itself has to be read, so a failure here ends the check and says why. */
+async function fetchPage(pageAddress) {
+  const unreachable = (reason) => new ScanError('page-unreachable', pageAddress, { reason });
+  const requested = toAddress(pageAddress);
+  if (!requested) throw unreachable('INVALID_ADDRESS');
+  try {
+    return await fetchText(requested, null);
+  } catch (error) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') throw unreachable('TIMEOUT');
+    // Node wraps a network error in "fetch failed" and keeps underneath the system's code
+    // for it, or for a request it refuses to make (a blocked port, say) a few words. An
+    // answer that could not be used carries its own short code as the message.
+    const cause = error.cause ?? error;
+    throw unreachable(toShownText(String(cause.code ?? cause.message)));
+  }
 }
 
 /**
@@ -108,27 +140,21 @@ function toAddress(reference, base) {
 
 /**
  * @param {URL} address
- * @param {string[]} skippedLargeFiles gains the path of a file that was there but too large to read
  * @param {string | null} homeOrigin the one site the file may be read from, or null for the page itself
- * @returns {Promise<{ text: string, sourceMapHeader: string | null, address: URL } | null>}
- *   null when there is nothing usable; `address` is where the file was finally read from
+ * @returns {Promise<{ text: string, sourceMapHeader: string | null, address: URL }>}
+ *   `address` is where the file was finally read from
+ * @throws when the server answered with something that cannot be used, with a short code
+ *   as the message, and whatever `fetch` throws when it did not answer
  */
-async function fetchText(address, skippedLargeFiles, homeOrigin) {
-  try {
-    const response = await request(address, homeOrigin);
-    if (!response?.ok) return null;
-    const text = await readCapped(response);
-    if (text === null) {
-      skippedLargeFiles.push(address.pathname);
-      return null;
-    }
-    // ECMA-426 section 11.1.1: `sourcemap` is the header, `x-sourcemap` its deprecated name.
-    const sourceMapHeader = response.headers.get('sourcemap') ?? response.headers.get('x-sourcemap');
-    return { text, sourceMapHeader, address: new URL(response.url) };
-  } catch {
-    // Unreachable, timed out or cut off: treated the same as a file that is not there.
-    return null;
-  }
+async function fetchText(address, homeOrigin) {
+  const response = await request(address, homeOrigin);
+  if (!response) throw new Error('LEFT_THE_SITE');
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const text = await readCapped(response);
+  if (text === null) throw new Error(TOO_LARGE);
+  // ECMA-426 section 11.1.1: `sourcemap` is the header, `x-sourcemap` its deprecated name.
+  const sourceMapHeader = response.headers.get('sourcemap') ?? response.headers.get('x-sourcemap');
+  return { text, sourceMapHeader, address: new URL(response.url) };
 }
 
 /**

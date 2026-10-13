@@ -4,12 +4,27 @@ const ENV_TEMPLATE_SUFFIX = /\.(?:example|sample|template|dist|defaults?)$/i;
 const KEY_FILE_NAMES = new Set(['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', '.npmrc', '.netrc', '.htpasswd']);
 const KEY_FILE_EXTENSIONS = new Set(['.p12', '.pfx', '.jks', '.keystore']);
 const DATABASE_EXTENSIONS = new Set(['.sql', '.sqlite', '.sqlite3', '.db', '.dump', '.bak']);
-// Windows writes this thumbnail cache next to images; it is not application data.
-const HARMLESS_DATABASE_NAMES = new Set(['Thumbs.db']);
+// Not application data: the thumbnail cache Windows writes next to images, and the build
+// state the Swift package manager keeps in its working folder.
+const HARMLESS_DATABASE_NAMES = new Set(['Thumbs.db', 'build.db']);
 const STRAY_SEVERITY = { env: 'critical', git: 'critical', 'key-file': 'critical', database: 'high', 'debug-symbols': 'high' };
 
 const ALWAYS_SOURCE_EXTENSIONS = new Set(['.tsx', '.vue', '.svelte']);
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const DEVELOPER_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.py', '.sh', '.rb', '.pl', '.ps1']);
+// Disk images, installers and archives hold the real files inside a format this scanner
+// does not open. A lone compressed file such as `app.js.gz` is not one of them.
+const SEALED_CONTAINER =
+  /\.(?:dmg|pkg|xip|iso|zip|ipa|apk|aab|jar|7z|rar|msi|msix|appx|deb|rpm|appimage|tar|tgz|tar\.(?:gz|bz2|xz|zst))$/i;
+// Formats in which a search of the bytes has nothing to find: pictures, sound, video and
+// fonts hold no text, and what a compressed file holds cannot be seen in its bytes.
+const TEXTLESS_EXTENSIONS = new Set(
+  [
+    ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.heic', '.ico', '.icns', '.bmp', '.tif', '.tiff'],
+    ['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi', '.mp3', '.m4a', '.aac', '.ogg', '.wav', '.flac'],
+    ['.woff', '.woff2', '.ttf', '.otf', '.ttc', '.pdf', '.gz', '.br', '.zst', '.xz', '.bz2'],
+  ].flat(),
+);
 
 /**
  * A file that should never be part of what ships: settings with secrets, key stores, data dumps.
@@ -47,6 +62,27 @@ export function checkUnshippedSource({ path, name, extension, isInsideArchive })
   const isTypeScript = extension === '.ts' && !name.endsWith('.d.ts');
   if (isTypeScript && (isInsideArchive || segments.includes('src'))) return [sourceFinding(path, 'source')];
   return [];
+}
+
+/**
+ * Notes and scripts written for whoever works on the project. Some ship on purpose, so
+ * this is a note to review, not a leak.
+ *
+ * @param {{ path: string, extension: string }} file
+ */
+export function checkDeveloperFile({ path, extension }) {
+  if (!DEVELOPER_FILE_EXTENSIONS.has(extension)) return [];
+  return [{ rule: 'developer-file', severity: 'info', path, detail: {} }];
+}
+
+/** Whether a file is a container whose contents stay unread, so that the report can say so. */
+export function isSealedContainer(name) {
+  return SEALED_CONTAINER.test(name);
+}
+
+/** Whether a file is of a kind that reading would tell nothing about. Every other file is read. */
+export function isTextless(extension) {
+  return TEXTLESS_EXTENSIONS.has(extension);
 }
 
 /** A dotenv file that holds real values, as opposed to a template with the values left blank. */

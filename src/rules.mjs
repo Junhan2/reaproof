@@ -1,5 +1,5 @@
 import { checkEndpoints, checkPromptCandidates, checkUnminifiedCode } from './checks/content.mjs';
-import { checkStrayFile, checkUnshippedSource } from './checks/paths.mjs';
+import { checkDeveloperFile, checkStrayFile, checkUnshippedSource } from './checks/paths.mjs';
 import { checkSecrets } from './checks/secrets.mjs';
 import { checkInlineMaps, checkMapFile } from './checks/sourcemaps.mjs';
 
@@ -14,16 +14,23 @@ const MAP_EXTENSIONS = new Set(['.map']);
 const SCRIPT_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const CODE_EXTENSIONS = new Set([...SCRIPT_EXTENSIONS, '.css']);
 const SECRET_SCAN_EXTENSIONS = new Set([...SCRIPT_EXTENSIONS, '.html', '.json', '.pem', '.key']);
-const SEVERITIES_ASCENDING = ['info', 'medium', 'high', 'critical'];
+// Leaks from the worst down. A note (`info`) is not one.
+export const LEAK_SEVERITIES = ['critical', 'high', 'medium'];
+const SEVERITIES_ASCENDING = ['info', ...[...LEAK_SEVERITIES].reverse()];
 const RISK_BY_WORST_SEVERITY = { critical: 'very-high', high: 'high', medium: 'moderate', info: 'baseline' };
 
-/** Tells the scanner which files are worth reading; every file still gets the name checks. */
+/** Tells the scanner which files are read whole, for every check; the rest are searched for keys only. */
 export function hasContentChecks(extension) {
   return (
     MAP_EXTENSIONS.has(extension) ||
     CODE_EXTENSIONS.has(extension) ||
     SECRET_SCAN_EXTENSIONS.has(extension)
   );
+}
+
+/** JavaScript is what `measure` can show more of, so the scanner keeps count of it. */
+export function isScript(extension) {
+  return SCRIPT_EXTENSIONS.has(extension);
 }
 
 /** @param {{ severity: Severity }[]} findings */
@@ -47,19 +54,28 @@ export function groupByRule(findings) {
  * The two things a result says at a glance.
  *
  * `risk` is how exposed the build is to an agent with a tool like rea. Its lowest level is
- * "baseline", never "safe": minified code, server addresses and screens are readable in
- * any shipped app.
+ * "baseline", never "safe": code structure, text and server addresses are readable in any
+ * shipped app. When what ships could not be read and no leak showed anyway, there is no
+ * level at all: "no leak found" would be a statement about nothing.
  *
  * `leaks` counts kinds of leak, each at its worst severity: three hundred exposed maps are
  * the same mistake as one, not three hundred times as bad. Notes are not leaks.
+ *
+ * @param {boolean} wasRead whether the scan got to read what ships
  */
-export function summarizeFindings(findings) {
-  const leaks = { critical: 0, high: 0, medium: 0 };
+export function summarizeFindings(findings, wasRead) {
+  const leaks = Object.fromEntries(LEAK_SEVERITIES.map((severity) => [severity, 0]));
   for (const sameRule of groupByRule(findings).values()) {
     const severity = worstSeverity(sameRule);
     if (severity !== 'info') leaks[severity] += 1;
   }
-  return { risk: RISK_BY_WORST_SEVERITY[worstSeverity(findings)], leaks };
+  const worst = worstSeverity(findings);
+  return { risk: !wasRead && worst === 'info' ? 'unrated' : RISK_BY_WORST_SEVERITY[worst], leaks };
+}
+
+/** Whether a result's leak counts hold one at this severity or worse. */
+export function hasLeakAtOrAbove(leaks, severity) {
+  return LEAK_SEVERITIES.slice(0, LEAK_SEVERITIES.indexOf(severity) + 1).some((worse) => leaks[worse] > 0);
 }
 
 /** An ASAR archive is not something to fix, only a fact its owner should know. */
@@ -74,7 +90,7 @@ export function archiveFinding(path, fileCount) {
  * @returns {Finding[]}
  */
 export function checkPath(file) {
-  return [...checkStrayFile(file), ...checkUnshippedSource(file)];
+  return [...checkStrayFile(file), ...checkUnshippedSource(file), ...checkDeveloperFile(file)];
 }
 
 /**
