@@ -5,13 +5,26 @@ import { applyFix, planFix, undoLastFix } from './fix.mjs';
 import { MeasureError, measureWithRea, REA_PACKAGE } from './measure.mjs';
 import { isWebAddress, scanDeployedSite } from './remote.mjs';
 import { createReporter, pickLanguage } from './report.mjs';
+import { hasLeakAtOrAbove, LEAK_SEVERITIES } from './rules.mjs';
 import { resolveTargets, scan, ScanError, withoutFiles } from './scan.mjs';
 import { toPrintable, toVisibleJson } from './text.mjs';
 
 const COMMANDS = { scan: runScan, fix: runFix, undo: runUndo, measure: runMeasure };
+const OPTIONS = {
+  json: { type: 'boolean' },
+  yes: { type: 'boolean', short: 'y' },
+  // The mildest leak that still stops a release.
+  'fail-on': { type: 'string' },
+  lang: { type: 'string' },
+  help: { type: 'boolean', short: 'h' },
+  version: { type: 'boolean', short: 'v' },
+};
 const EXIT_OK = 0;
 const EXIT_FINDINGS = 1;
 const EXIT_USAGE = 2;
+// Nothing could be read: an address that did not answer, or a target with nothing in it
+// that this scanner opens. A check that read nothing must not pass for a clean one.
+const EXIT_UNREAD = 3;
 
 /**
  * Everything the command needs from the outside world, so the flow can be driven by a
@@ -38,24 +51,24 @@ export async function main(argv, outside) {
   };
   let parsed;
   try {
-    parsed = parseArgs({
-      args: argv,
-      options: {
-        json: { type: 'boolean' },
-        yes: { type: 'boolean', short: 'y' },
-        lang: { type: 'string' },
-        help: { type: 'boolean', short: 'h' },
-        version: { type: 'boolean', short: 'v' },
-      },
-      allowPositionals: true,
-    });
+    parsed = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true });
   } catch (error) {
-    terminal.printError(createReporter(pickLanguage()).usageError(error));
-    return EXIT_USAGE;
+    // What can still be read of the command says how to answer it: in which language, and as JSON or not.
+    const { values } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: false });
+    const report = createReporter(pickLanguage(typeof values.lang === 'string' ? values.lang : undefined));
+    const wantsJson = values.json === true;
+    const reason = report.usageError(error);
+    // A person is shown how the command is used. An agent gets the reason alone.
+    const message = wantsJson ? reason : `${reason}\n\n${report.help}`;
+    return fail(terminal, report, wantsJson, EXIT_USAGE, { code: 'usage', message });
   }
 
-  const { values: options, positionals } = parsed;
+  const { values, positionals } = parsed;
+  const options = { ...values, failOn: values['fail-on'] ?? 'high' };
   const report = createReporter(pickLanguage(options.lang));
+  if (!LEAK_SEVERITIES.includes(options.failOn)) {
+    return fail(terminal, report, options.json, EXIT_USAGE, { code: 'usage', message: report.failOnError(options.failOn) });
+  }
   if (options.help) {
     terminal.print(report.help);
     return EXIT_OK;
@@ -72,15 +85,29 @@ export async function main(argv, outside) {
     return await COMMANDS[command](target, options, report, terminal);
   } catch (error) {
     if (error instanceof ScanError) {
-      terminal.printError(report.scanError(error));
-      return EXIT_USAGE;
+      const { code, path, details } = error;
+      const exitCode = code === 'page-unreachable' ? EXIT_UNREAD : EXIT_USAGE;
+      return fail(terminal, report, options.json, exitCode, { code, message: report.scanError(error), path, ...details });
     }
     if (error instanceof MeasureError) {
-      terminal.printError(report.measureFailed(error));
-      return EXIT_USAGE;
+      const failure = { code: 'measure-failed', message: report.measureFailed(error) };
+      return fail(terminal, report, options.json, EXIT_USAGE, failure);
     }
     throw error;
   }
+}
+
+/**
+ * Says why the command stopped, and hands back the code it ends with. When JSON was asked
+ * for it is JSON on standard output like any other answer, so that whoever parses the
+ * output is never handed nothing.
+ *
+ * @param {{ code: string, message: string }} failure and whatever else is known about it
+ */
+function fail(terminal, report, wantsJson, exitCode, failure) {
+  if (wantsJson) terminal.print(toJson({ exitCode, error: failure }, report));
+  else terminal.printError(failure.message);
+  return exitCode;
 }
 
 /**
@@ -93,13 +120,14 @@ async function runScan(target, options, report, terminal) {
   const result = isWebAddress(target)
     ? await scanDeployedSite(target)
     : await scanOrOfferBuild(resolve(target), ask, report, terminal);
-  terminal.print(options.json ? toJson(withExplanation(result, report), report) : report.scan(result));
+  const ending = endingOf(result, options);
+  terminal.print(options.json ? toJson(withExplanation(result, report, ending), report) : report.scan(result));
 
   // A deployed result plans nothing: none of its findings is a file on disk.
   const mapPaths = planFix(result);
-  if (!ask || mapPaths.length === 0) return exitCodeFor(result);
+  if (!ask || mapPaths.length === 0) return closeWith(ending, options, report, terminal);
   terminal.print(`\n${report.fixPlan(result.root, mapPaths)}`);
-  if (!(await ask(report.confirmQuestion))) return exitCodeFor(result);
+  if (!(await ask(report.confirmQuestion))) return closeWith(ending, options, report, terminal);
   return takeOutMaps(result, mapPaths, options, report, terminal);
 }
 
@@ -108,7 +136,7 @@ async function scanOrOfferBuild(root, ask, report, terminal) {
     return scan(root);
   } catch (error) {
     // Only a missing build output carries the command that would produce it.
-    const buildCommand = error instanceof ScanError ? error.buildCommand : null;
+    const buildCommand = error instanceof ScanError ? error.details.buildCommand : null;
     if (!ask || !buildCommand || !(await ask(report.buildQuestion(buildCommand.join(' '))))) throw error;
     if (!terminal.runBuild(buildCommand, root)) throw new ScanError('build-failed', root);
     return scan(root);
@@ -125,9 +153,10 @@ async function runFix(target, options, report, terminal) {
   const root = toLocalRoot(target);
   const before = scan(root);
   const mapPaths = planFix(before);
+  const ending = endingOf(before, options);
   if (mapPaths.length === 0) {
-    terminal.print(options.json ? toJson({ movedCount: 0, before }, report) : report.nothingToFix);
-    return exitCodeFor(before);
+    terminal.print(options.json ? toJson({ ...ending, movedCount: 0, before }, report) : report.nothingToFix);
+    return closeWith(ending, options, report, terminal);
   }
 
   if (!options.yes) {
@@ -142,7 +171,7 @@ async function runFix(target, options, report, terminal) {
     }
     if (!(await terminal.ask(report.confirmQuestion))) {
       terminal.print(report.cancelled);
-      return exitCodeFor(before);
+      return closeWith(ending, options, report, terminal);
     }
   }
   return takeOutMaps(before, mapPaths, options, report, terminal);
@@ -152,8 +181,13 @@ function takeOutMaps(before, mapPaths, options, report, terminal) {
   const applied = applyFix(before.root, mapPaths);
   // The moved files are the only change, so the rest of the output is not read again.
   const after = withoutFiles(before, mapPaths);
-  terminal.print(options.json ? toJson({ ...applied, before, after }, report) : report.fixDone(before, after, applied));
-  return exitCodeFor(after);
+  // The check has been made already, so an output with nothing left in it is not a failure.
+  const exitCode = hasLeakAtOrAbove(after.leaks, options.failOn) ? EXIT_FINDINGS : EXIT_OK;
+  const ending = { failOn: options.failOn, exitCode };
+  terminal.print(
+    options.json ? toJson({ ...ending, ...applied, before, after }, report) : report.fixDone(before, after, applied),
+  );
+  return closeWith(ending, options, report, terminal);
 }
 
 function runUndo(target, options, report, terminal) {
@@ -168,7 +202,7 @@ function runUndo(target, options, report, terminal) {
 
 async function runMeasure(target, options, report, terminal) {
   const root = toLocalRoot(target);
-  const targets = resolveTargets(root);
+  const { targets } = resolveTargets(root);
   // rea is someone else's program: it is downloaded and run only after a yes.
   if (!options.yes) {
     if (options.json) {
@@ -196,14 +230,35 @@ async function runMeasure(target, options, report, terminal) {
   return EXIT_OK;
 }
 
-/** The JSON a scan prints: the result, plus what it means and what to do, in words. */
-function withExplanation(result, report) {
-  return { ...result, explain: report.explain(result) };
+/**
+ * The JSON a scan prints: the result, plus what it means and what to do, in words. The
+ * verdict comes first and the list of findings last, so an answer that a reader cuts short
+ * still says the most important thing.
+ *
+ * @param {{ failOn: string, exitCode: number }} ending
+ */
+function withExplanation(result, report, ending) {
+  const { risk, leaks, findings, ...facts } = result;
+  return { risk, leaks, ...ending, explain: report.explain(result), ...facts, findings };
 }
 
-/** Critical and high leaks are the ones worth failing a release check over. */
-function exitCodeFor({ leaks }) {
-  return leaks.critical + leaks.high > 0 ? EXIT_FINDINGS : EXIT_OK;
+/**
+ * How a command ends when that follows from a result. A leak is worth failing a release
+ * check over when it is critical or high, unless `--fail-on` says otherwise: medium ones
+ * too, or critical ones alone. The answer says how it ends as well, for whoever reads a
+ * log later and for an agent that is not shown the exit code: `failOn` and `exitCode` in
+ * the JSON, and a closing line in the text (`closeWith`).
+ */
+function endingOf(result, options) {
+  const stops = hasLeakAtOrAbove(result.leaks, options.failOn);
+  const exitCode = stops ? EXIT_FINDINGS : result.risk === 'unrated' ? EXIT_UNREAD : EXIT_OK;
+  return { failOn: options.failOn, exitCode };
+}
+
+function closeWith({ failOn, exitCode }, options, report, terminal) {
+  const closing = options.json ? null : report.closing(exitCode, failOn);
+  if (closing) terminal.print(`\n${closing}`);
+  return exitCode;
 }
 
 function readPackageVersion() {

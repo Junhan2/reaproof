@@ -1,8 +1,7 @@
 import { isFixable } from './fix.mjs';
-import { groupByRule, SOURCE_MAP_RULES, STANDALONE_MAP_RULES, worstSeverity } from './rules.mjs';
+import { groupByRule, LEAK_SEVERITIES, SOURCE_MAP_RULES, STANDALONE_MAP_RULES, worstSeverity } from './rules.mjs';
 import { toDisplayPath } from './scan.mjs';
 
-const LEAK_SEVERITIES = ['critical', 'high', 'medium'];
 const MAX_LISTED_PATHS = 5;
 const MAX_LISTED_ADDRESSES = 10;
 const INDENT = '  ';
@@ -12,28 +11,43 @@ const KO = {
   severity: { critical: '심각', high: '높음', medium: '보통', info: '안내' },
   severityName: { critical: '심각', high: '높음', medium: '보통' },
   target: (paths) => `대상: ${paths}`,
+  pickedByName: '(package.json 옆에서 이름으로 고른 결과물 폴더)',
   scanned: (count) => `읽어 본 파일 ${count}개`,
+  ofSeen: (count) => `만난 파일 ${count}개 중`,
+  programsAmong: (count) => `실행 파일 ${count}개 포함`,
   leaksLabel: '찾은 누수',
   noLeaks: '없음',
   leakKinds: (count) => `${count}종류`,
+  // By exit code, the ones the help below lists.
+  closings: {
+    1: (level, name) => `종료 코드 1: ${name} 이상의 누수가 있어 멈춥니다 (--fail-on ${level}).`,
+    3: () => '종료 코드 3: 판정하지 못한 채 끝납니다.',
+  },
   riskLabel: 'rea 위험도',
-  riskLevels: { 'very-high': '매우 높음', high: '높음', moderate: '보통', baseline: '기본' },
+  riskLevels: { 'very-high': '매우 높음', high: '높음', moderate: '보통', baseline: '기본', unrated: '판정 없음' },
   riskSummaries: {
     'very-high': 'rea 같은 도구로 원본 코드나 비밀 값을 그대로 가져갈 수 있습니다.',
-    high: '비밀에 가까운 값이나 데이터, 실행 중인 앱의 속이 드러나 있습니다.',
-    moderate: '코드의 이름과 구조가 쉽게 읽힙니다.',
+    high: '비밀에 가까운 값이나 데이터, 또는 실행 중인 프로그램의 속이 드러나 있습니다.',
+    moderate: '비밀 값은 나오지 않았지만, 아래 항목이 코드를 읽거나 실행 중인 앱에 손대기 더 쉽게 만듭니다.',
     baseline:
-      '새는 곳은 찾지 못했습니다. 그래도 압축된 코드, 서버 주소, 화면 구조는 읽힙니다. 어떤 앱이든 지는 위험입니다.',
+      '이 도구가 찾는 누수는 나오지 않았습니다. 그래도 코드의 구조, 그 안의 글과 값, 서버 주소는 읽힙니다. 어떤 앱이든 지는 위험입니다.',
+    unrated: '출시물의 본체를 읽지 못해 판정하지 않았습니다. 새는 곳이 없다는 뜻이 아닙니다.',
   },
   andMore: (count) => `외 ${count}개`,
   originals: (names) => `원본: ${names}`,
+  notSigned: '서명 없음',
+  namesIn: (architecture, count) => `${architecture}: 이름 ${count}개`,
+  sourcesIn: (count, sample) => `원본 경로 ${count}개, 예: ${sample}`,
   // Listed roughly from most to least damaging: a report shows the rules in this order.
   rules: {
     'stray-file': {
       title: '배포물에 있으면 안 되는 파일이 섞여 있습니다',
-      body: () => [
-        '설정 파일, 저장소 폴더, 열쇠 보관 파일, DB 파일은 그 자체로 원본이나 비밀을 담고 있습니다.',
-        '결과물에서 지우고, 어디서 복사돼 들어오는지(예: public 폴더, 묶을 파일 목록) 확인하세요.',
+      body: ({ debugSymbols }) => [
+        '설정 파일, 저장소 폴더, 열쇠 보관 파일, DB 파일, 디버그 정보는 그 자체로 원본이나 비밀을 담고 있습니다.',
+        '배포물에서 빼고, 어디서 섞여 들어오는지(예: 통째로 복사되는 폴더, 묶을 파일 목록) 확인하세요.',
+        ...(debugSymbols > 0
+          ? ['디버그 정보(.dSYM)는 지우지 말고 배포물 밖에 보관하세요. 사용자에게서 온 오류 기록을 풀 때 씁니다.']
+          : []),
       ],
     },
     secret: {
@@ -66,10 +80,10 @@ const KO = {
       ],
     },
     'macos-entitlement': {
-      title: '개발용 권한이 켜진 채 서명됐습니다',
+      title: '실행 중인 앱의 속을 여는 권한이 켜진 채 서명됐습니다',
       body: () => [
-        'get-task-allow 권한이 있으면 다른 프로그램이 실행 중인 앱에 붙어 속을 들여다볼 수 있습니다.',
-        '출시용 서명에서는 이 권한을 빼세요.',
+        'get-task-allow 는 다른 프로그램이 실행 중인 앱에 붙어 속을 들여다보게 합니다. disable-library-validation 은 누가 서명했든 플러그인과 라이브러리를 앱 안에 싣게 합니다.',
+        '꼭 필요한 것이 아니면 출시용 서명의 권한 목록(entitlements)에서 빼세요.',
       ],
     },
     'sourcemap-names': {
@@ -79,11 +93,22 @@ const KO = {
         '압축된 코드를 원래 구조로 되짚기가 쉬워집니다.',
       ],
     },
+    'native-symbols': {
+      title: '실행 파일에 개발할 때 쓰는 이름표가 그대로 남아 있습니다',
+      body: ({ files, names, sources, builders }) => [
+        `실행 파일 ${files}개에 함수와 변수 이름 ${names}개가 남아 있습니다. 코드가 무슨 일을 하는지 이름만으로 읽힙니다.`,
+        ...(builders > 0 ? ['원본 파일의 경로도 들어 있어, 빌드한 컴퓨터의 계정 이름과 폴더 구조가 그대로 보입니다.'] : []),
+        ...(sources > 0 && builders === 0 ? ['원본 파일의 경로도 들어 있어, 코드의 폴더 구조가 그대로 보입니다.'] : []),
+        '서명하기 전에 strip 으로 떼세요. 실행 파일은 옵션 없는 strip 이 이름을 모두 떼고, 다른 파일이 불러 쓰는 라이브러리는 strip -x 가 밖에서 쓰는 이름만 남깁니다. strip -S 는 경로와 디버그 표식만 뗍니다.',
+        '떼기 전에 디버그 정보(.dSYM)를 배포물 밖에 보관해 두면 오류 기록은 계속 풀 수 있습니다.',
+        '뗀 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다. 직접 세어 보려면 nm --no-dyldinfo -a <파일> 을 쓰세요. 옵션 없는 nm 은 이름을 뗀 프로그램에 <redacted function N> 을 지어 붙입니다.',
+      ],
+    },
     'macos-runtime': {
       title: '강화 실행 환경(Hardened Runtime)이 꺼져 있습니다',
       body: () => [
-        '꺼져 있으면 실행 중인 앱에 다른 코드를 끼워 넣기 쉽습니다.',
-        '서명할 때 Hardened Runtime 옵션을 켜세요.',
+        '꺼져 있거나 서명이 없으면 실행 중인 앱에 다른 코드를 끼워 넣기 쉽습니다.',
+        '서명할 때 켜세요(codesign 은 --options runtime). 실행 파일마다 따로 서명되므로 앱 안의 도우미 프로그램도 확인하세요.',
       ],
     },
     'electron-fuse': {
@@ -112,6 +137,13 @@ const KO = {
       body: ({ files }) => [
         `코드 파일 ${files}개가 이름과 줄바꿈이 그대로입니다. 함수 이름과 흐름이 한눈에 읽힙니다.`,
         '빌드 도구의 압축(minify) 옵션을 켜세요. 읽는 수고를 늘릴 뿐 숨겨 주지는 않습니다.',
+      ],
+    },
+    'developer-file': {
+      title: '개발하는 사람이 보려고 쓴 문서와 스크립트가 함께 들어 있습니다',
+      body: ({ files }) => [
+        `문서와 스크립트 파일 ${files}개가 들어 있습니다. 웹사이트라면 올라가는 순간 누구나 주소로 열어 볼 수 있습니다.`,
+        '올릴 필요가 없으면 배포에서 빼세요(예: 호스팅의 제외 목록, 묶을 파일 목록). 일부러 넣은 것이면 그대로 두면 됩니다.',
       ],
     },
     endpoint: {
@@ -162,21 +194,41 @@ const KO = {
   limits: [
     '화면 구조와 서버 요청 주소는 사용자 기기로 내려가는 이상 가릴 수 없습니다.',
     '가격 계산, 권한 판단처럼 베껴지면 안 되는 로직은 서버에서 계산하세요.',
-    '실제로 무엇이 읽히는지는 reaproof measure 로 볼 수 있습니다.',
   ],
+  namesThatStay:
+    '실행 파일은 이름을 떼어도 실행에 필요한 이름은 남습니다. 불러 쓰는 라이브러리 함수의 이름이 그렇고, Swift 와 Objective-C 에서는 자기 타입, 속성, 클래스, 메서드 이름도 남습니다.',
+  measureHint: 'JavaScript 에서 실제로 무엇이 읽히는지는 reaproof measure 로 볼 수 있습니다.',
   deployedScope: '이 점검은 배포된 지도 파일만 봅니다. 열쇠와 섞인 파일은 결과물 폴더에서 reaproof 로 점검하세요.',
   skippedOtherOrigins: (count) => `다른 주소에서 불러오는 파일 ${count}개는 보지 않았습니다.`,
   skippedLarge: (count) => `너무 커서 건너뛴 파일 ${count}개`,
   unreadableArchives: (count) => `읽지 못한 ASAR 꾸러미 ${count}개`,
+  unopenedContainers: (count, names) =>
+    `열지 못한 꾸러미 ${count}개(${names}): 이 종류는 안을 읽지 못합니다. 안에 든 앱이나 폴더를 꺼내 직접 가리켜 주세요.`,
+  diskImageHint: 'DMG 는 hdiutil attach -readonly -nobrowse <파일> 로 연 뒤, /Volumes 아래에 나타난 앱을 가리키면 됩니다.',
+  textless: (count) => `그림, 소리, 영상, 글꼴, 압축 파일처럼 읽어도 찾을 것이 없는 ${count}개는 읽지 않았습니다.`,
   errors: {
     'path-not-found': (path) => [`경로를 찾지 못했습니다: ${path}`],
-    'no-build-output': (path, buildCommand = 'npm run build') => [
+    'no-build-output': (path, { buildCommand }) => [
       `빌드 결과물을 찾지 못했습니다: ${path}`,
-      `먼저 빌드하세요(${buildCommand}). 결과물 폴더를 직접 알려 줘도 됩니다(예: reaproof dist).`,
+      `먼저 빌드하세요(${buildCommand?.join(' ') ?? 'npm run build'}). 결과물 폴더를 직접 알려 줘도 됩니다(예: npx reaproof dist).`,
+    ],
+    'artifact-needed': (path, { projectFile }) => [
+      `이 폴더는 소스 프로젝트로 보입니다(${projectFile}): ${path}`,
+      '무엇이 출시물인지는 짐작하지 않습니다. 출시물을 직접 가리켜 주세요(예: npx reaproof 경로/MyApp.app).',
     ],
     'build-failed': () => ['빌드가 끝까지 되지 않았습니다. 위에 나온 오류를 먼저 해결하세요.'],
     'page-unreachable': (url) => [`주소를 열지 못했습니다: ${url}`],
     'local-only': () => ['이 명령은 주소에는 쓸 수 없습니다. 결과물 폴더에서 실행하세요.'],
+  },
+  because: (reason) => `이유: ${reason}`,
+  unreachableReasons: {
+    INVALID_ADDRESS: '주소 모양이 올바르지 않습니다',
+    TIMEOUT: '기다려도 답이 없었습니다',
+    TOO_LARGE: '첫 화면이 너무 커서 읽지 않았습니다',
+    HTTP: '서버가 오류로 답했습니다',
+    ENOTFOUND: '그 이름의 사이트를 찾지 못했습니다',
+    ECONNREFUSED: '서버가 연결을 받지 않았습니다',
+    ECONNRESET: '연결이 도중에 끊겼습니다. 아직 배포 전이거나 보안 인증서가 준비되지 않은 사이트에서 흔합니다',
   },
   fixPlanTitle: (count) => `지도 파일 ${count}개를 배포물에서 뺍니다:`,
   buildQuestion: (command) => `빌드 결과물이 없습니다. 지금 빌드할까요? (${command}) (y/N) `,
@@ -209,11 +261,12 @@ const KO = {
   },
   measureFailed: (reason) => `rea 를 실행하지 못했습니다: ${reason}`,
   usageError: (reason) => `명령을 이해하지 못했습니다: ${reason}`,
+  failOnError: (value) => `--fail-on 은 critical, high, medium 가운데 하나여야 합니다 (받은 값: ${value}).`,
   help: [
     'Reaproof: 출시물에서 쉽게 읽히는 것을 찾아 닫습니다.',
     '',
     '사용법:',
-    '  reaproof [경로]           결과물을 점검합니다 (경로를 빼면 지금 폴더)',
+    '  reaproof [경로]           결과물 폴더나 앱을 점검합니다 (경로를 빼면 지금 폴더)',
     '  reaproof <https://주소>   배포된 사이트에 지도 파일이 공개돼 있는지 봅니다',
     '  reaproof fix [경로]       지도 파일을 배포물에서 뺍니다 (되돌릴 수 있음)',
     '  reaproof undo [경로]      마지막 fix 를 되돌립니다',
@@ -222,9 +275,16 @@ const KO = {
     '옵션:',
     '  --json         결과를 JSON 으로 출력',
     '  -y, --yes      fix 와 measure 를 묻지 않고 진행',
+    '  --fail-on 등급 이 등급부터 종료 코드 1 (critical, high, medium 중 하나. 기본은 high)',
     '  --lang ko|en   출력 언어',
     '  -h, --help     도움말',
     '  -v, --version  버전',
+    '',
+    '종료 코드:',
+    '  0 멈출 누수 없음 (보통 등급은 --fail-on medium 을 줘야 1 이 됩니다)',
+    '  1 --fail-on 등급 이상의 누수 있음',
+    '  2 쓰는 법이 틀렸거나 대상을 정하지 못함',
+    '  3 읽은 것이 없음 (열지 못한 주소, 열지 못하는 종류의 파일)',
     '',
     'AI 에게 맡길 때:',
     '  "npx reaproof --json 을 돌리고 결과대로 고쳐 줘" 라고 하면 됩니다.',
@@ -236,28 +296,42 @@ const EN = {
   severity: { critical: 'CRITICAL', high: 'HIGH', medium: 'MEDIUM', info: 'NOTE' },
   severityName: { critical: 'critical', high: 'high', medium: 'medium' },
   target: (paths) => `Target: ${paths}`,
+  pickedByName: '(output folders picked by name, next to package.json)',
   scanned: (count) => `Files read: ${count}`,
+  ofSeen: (count) => `of ${count} met`,
+  programsAmong: (count) => `${count} of them programs`,
   leaksLabel: 'Leaks found',
   noLeaks: 'none',
   leakKinds: (count) => `${count} kind${count === 1 ? '' : 's'}`,
+  closings: {
+    1: (level, name) => `Exit code 1: a leak at ${name} or above was found (--fail-on ${level}).`,
+    3: () => 'Exit code 3: ended without a rating.',
+  },
   riskLabel: 'rea risk',
-  riskLevels: { 'very-high': 'very high', high: 'high', moderate: 'moderate', baseline: 'baseline' },
+  riskLevels: { 'very-high': 'very high', high: 'high', moderate: 'moderate', baseline: 'baseline', unrated: 'not rated' },
   riskSummaries: {
     'very-high': 'A tool like rea can take your original source or your secret values as they are.',
-    high: 'Near-secret values, data, or the inside of the running app are exposed.',
-    moderate: 'The names and structure of your code read easily.',
+    high: 'Near-secret values, data, or the inside of the running program are exposed.',
+    moderate: 'No secret value was found, but the findings below make the code easier to read or the running app easier to get into.',
     baseline:
-      'No leak was found. Minified code, server addresses and screen structure are still readable, as in any shipped app.',
+      'None of the leaks this tool looks for was found. Code structure, the text and values in it, and server addresses are still readable, as in any shipped app.',
+    unrated: 'What ships could not be read, so no rating is given. That does not mean nothing leaks.',
   },
   andMore: (count) => `and ${count} more`,
   originals: (names) => `originals: ${names}`,
+  notSigned: 'not signed',
+  namesIn: (architecture, count) => `${architecture}: ${count} names`,
+  sourcesIn: (count, sample) => `${count} original path(s), for example ${sample}`,
   // In the same order as the Korean table, which sets the order a report shows them in.
   rules: {
     'stray-file': {
       title: 'Files that should never ship are in the output',
-      body: () => [
-        'Settings files, repository folders, key stores and database files carry your source or your secrets as they are.',
-        'Delete them from the output and find out how they get copied in (a public folder, a packaging file list).',
+      body: ({ debugSymbols }) => [
+        'Settings files, repository folders, key stores, database files and debug information carry your source or your secrets as they are.',
+        'Take them out of what ships and find out how they get in (a folder copied whole, a packaging file list).',
+        ...(debugSymbols > 0
+          ? ['Do not delete the debug information (.dSYM): keep it outside what ships. It is what makes crash reports from users readable.']
+          : []),
       ],
     },
     secret: {
@@ -290,10 +364,10 @@ const EN = {
       ],
     },
     'macos-entitlement': {
-      title: 'The app is signed with a development entitlement',
+      title: 'The app is signed with entitlements that open it up while it runs',
       body: () => [
-        'With get-task-allow, another program can attach to the running app and look inside it.',
-        'Leave this entitlement out of release signing.',
+        'get-task-allow lets another program attach to the running app and look inside it. disable-library-validation lets the app load plug-ins and libraries whoever signed them.',
+        'Leave out of release signing whichever of them the app does not need.',
       ],
     },
     'sourcemap-names': {
@@ -303,11 +377,26 @@ const EN = {
         'That makes it much easier to work back from the minified code to its original structure.',
       ],
     },
+    'native-symbols': {
+      title: 'Names meant for development are still in the program',
+      body: ({ files, names, sources, builders }) => [
+        `${files} program file(s) keep ${names} names of functions and variables. What the code does reads from the names alone.`,
+        ...(builders > 0
+          ? ['They also hold the paths of original files, which show the account name and folder layout of the machine that built them.']
+          : []),
+        ...(sources > 0 && builders === 0
+          ? ['They also hold the paths of original files, which show the folder layout of the code.']
+          : []),
+        'Strip them before signing. For a program, strip with no options removes every name; for a library that other files load, strip -x keeps only the names used from outside. strip -S removes just the paths and the debugging entries.',
+        'Keep the debug information (.dSYM) outside what ships first, and crash reports can still be read.',
+        'Run reaproof again afterwards: when this finding is gone, it worked. To count the names yourself, use nm --no-dyldinfo -a <file>; plain nm adds entries of its own, <redacted function N>, to a stripped program.',
+      ],
+    },
     'macos-runtime': {
       title: 'The Hardened Runtime is off',
       body: () => [
-        'Without it, other code is easier to load into the running app.',
-        'Turn on the Hardened Runtime option when signing.',
+        'When it is off, or the program is not signed, other code is easier to load into the running app.',
+        'Turn it on when signing (codesign --options runtime). Each program is signed by itself, so check the helper programs inside the app too.',
       ],
     },
     'electron-fuse': {
@@ -336,6 +425,13 @@ const EN = {
       body: ({ files }) => [
         `${files} code file(s) keep their names and line breaks. Function names and flow read at a glance.`,
         'Turn on minification in your build tool. It adds reading effort; it does not hide anything.',
+      ],
+    },
+    'developer-file': {
+      title: 'Notes and scripts written for developers are included',
+      body: ({ files }) => [
+        `${files} notes or script file(s) are included. On a website, anyone can open them by address once they are deployed.`,
+        'Leave them out of the deploy if they do not need to be there (a hosting ignore list, a packaging file list). If they ship on purpose, move on.',
       ],
     },
     endpoint: {
@@ -386,21 +482,42 @@ const EN = {
   limits: [
     'Screen structure and the server addresses you call cannot be hidden once they reach a user device.',
     'Compute anything that must not be copied, such as pricing or permission checks, on a server.',
-    'To see what is actually readable, run reaproof measure.',
   ],
+  namesThatStay:
+    'A stripped program still carries the names it needs to run: those of the library functions it calls and, in Swift and Objective-C, of its own types, properties, classes and methods.',
+  measureHint: 'To see what is actually readable in the JavaScript, run reaproof measure.',
   deployedScope: 'This check looks at deployed source maps only. Check keys and stray files in the build output with reaproof.',
   skippedOtherOrigins: (count) => `Files loaded from other addresses were not checked: ${count}`,
   skippedLarge: (count) => `Files skipped for size: ${count}`,
   unreadableArchives: (count) => `ASAR archives that could not be read: ${count}`,
+  unopenedContainers: (count, names) =>
+    `Containers that could not be opened: ${count} (${names}). This scanner does not read inside this kind. Take out the app or folder inside and point at that.`,
+  diskImageHint: 'For a DMG, open it with hdiutil attach -readonly -nobrowse <file> and point at the app that appears under /Volumes.',
+  textless: (count) =>
+    `Not read: ${count} file(s) such as pictures, sound, video, fonts and compressed files, in which there is nothing to find.`,
   errors: {
     'path-not-found': (path) => [`Path not found: ${path}`],
-    'no-build-output': (path, buildCommand = 'npm run build') => [
+    'no-build-output': (path, { buildCommand }) => [
       `No build output found in: ${path}`,
-      `Build first (${buildCommand}), or point at the output folder (for example: reaproof dist).`,
+      `Build first (${buildCommand?.join(' ') ?? 'npm run build'}), or point at the output folder (for example: npx reaproof dist).`,
+    ],
+    'artifact-needed': (path, { projectFile }) => [
+      `This folder looks like a source project (${projectFile}): ${path}`,
+      'What it ships is not guessed. Point at the thing that ships (for example: npx reaproof path/to/MyApp.app).',
     ],
     'build-failed': () => ['The build did not finish. Fix the errors shown above first.'],
     'page-unreachable': (url) => [`Could not open the address: ${url}`],
     'local-only': () => ['This command does not work on an address. Run it on the build output.'],
+  },
+  because: (reason) => `Reason: ${reason}`,
+  unreachableReasons: {
+    INVALID_ADDRESS: 'that is not a well-formed address',
+    TIMEOUT: 'no answer came in time',
+    TOO_LARGE: 'the first page is too large to read',
+    HTTP: 'the server answered with an error',
+    ENOTFOUND: 'no site with that name was found',
+    ECONNREFUSED: 'the server did not accept the connection',
+    ECONNRESET: 'the connection was cut off, as often happens with a site that is not deployed yet or whose certificate is not ready',
   },
   fixPlanTitle: (count) => `${count} map file(s) will be taken out of the output:`,
   buildQuestion: (command) => `There is no build output. Build now? (${command}) (y/N) `,
@@ -433,11 +550,12 @@ const EN = {
   },
   measureFailed: (reason) => `Could not run rea: ${reason}`,
   usageError: (reason) => `Could not understand the command: ${reason}`,
+  failOnError: (value) => `--fail-on takes critical, high or medium (got: ${value}).`,
   help: [
     'Reaproof: finds what is easy to read in what you ship, and closes it.',
     '',
     'Usage:',
-    '  reaproof [path]           check the build output (defaults to the current folder)',
+    '  reaproof [path]           check a build output or an app (defaults to the current folder)',
     '  reaproof <https://site>   check whether a deployed site serves its source maps',
     '  reaproof fix [path]       take map files out of the output (can be undone)',
     '  reaproof undo [path]      undo the last fix',
@@ -446,9 +564,16 @@ const EN = {
     'Options:',
     '  --json         print results as JSON',
     '  -y, --yes      run fix and measure without asking',
+    '  --fail-on LEVEL  exit with 1 from this level up (critical, high or medium; high by default)',
     '  --lang ko|en   output language',
     '  -h, --help     help',
     '  -v, --version  version',
+    '',
+    'Exit codes:',
+    '  0 no leak to stop for (a moderate result is 1 only with --fail-on medium)',
+    '  1 a leak at or above the --fail-on level',
+    '  2 wrong usage, or no target could be settled on',
+    '  3 nothing was read (an address that did not answer, a kind of file that cannot be opened)',
     '',
     'With an AI agent:',
     '  Ask it to run "npx reaproof --json" and act on the result.',
@@ -474,8 +599,9 @@ export function pickLanguage(requested) {
 export function createReporter(language) {
   const t = MESSAGES[language];
   const indent = (lines) => lines.map((line) => INDENT + line);
-  const capList = (lines, limit) =>
-    lines.length <= limit ? lines : [...lines.slice(0, limit), `- ${t.andMore(lines.length - limit)}`];
+  const capWith = (items, limit, toLast) =>
+    items.length <= limit ? items : [...items.slice(0, limit), toLast(items.length - limit)];
+  const capList = (lines, limit) => capWith(lines, limit, (count) => `- ${t.andMore(count)}`);
 
   /** "none", or "2 kinds (critical 1, medium 1)": never a score that could read as "safe". */
   function describeLeaks(leaks) {
@@ -492,9 +618,18 @@ export function createReporter(language) {
     if (rule === 'stray-file') return `- ${path} (${t.strayKinds[detail.kind]})`;
     if (rule === 'electron-fuse') return `- ${path}: ${detail.enabled.join(', ')}`;
     if (rule === 'prompt-candidate') return `- ${path}: "${detail.preview}…"`;
-    if (SOURCE_MAP_RULES.has(rule) && detail.sampleSources.length > 0) {
-      return `- ${path} (${t.originals(detail.sampleSources.join(', '))})`;
+    if (rule === 'macos-entitlement') return `- ${path}: ${detail.entitlements.join(', ')}`;
+    if (rule === 'macos-runtime') {
+      // Written the way `codesign -dv` shows it, so the two can be put side by side.
+      const slices = detail.slices.map(({ architecture, flags }) => `${architecture}: ${flags ? `flags=${flags}` : t.notSigned}`);
+      return `- ${path} (${slices.join('; ')})`;
     }
+    if (rule === 'native-symbols') {
+      const facts = [t.namesIn(detail.architecture, detail.names)];
+      if (detail.sourceCount > 0) facts.push(t.sourcesIn(detail.sourceCount, detail.sampleSources[0]));
+      return `- ${path} (${facts.join(', ')})`;
+    }
+    if (detail.sampleSources?.length > 0) return `- ${path} (${t.originals(detail.sampleSources.join(', '))})`;
     return `- ${path}`;
   }
 
@@ -502,13 +637,53 @@ export function createReporter(language) {
   function summarizeRule(findings) {
     // An address list is about the addresses, not about which file each one sits in.
     const addresses = [...new Set(findings.flatMap(({ detail }) => detail.addresses ?? []))];
+    const sumOf = (field) => findings.reduce((sum, { detail }) => sum + (detail[field] ?? 0), 0);
     const totals = {
       files: findings.length,
-      embedded: findings.reduce((sum, { detail }) => sum + (detail.embeddedCount ?? 0), 0),
-      sources: findings.reduce((sum, { detail }) => sum + (detail.sourceCount ?? 0), 0),
+      embedded: sumOf('embeddedCount'),
+      sources: sumOf('sourceCount'),
+      names: sumOf('names'),
+      builders: findings.filter(({ detail }) => detail.namesBuilder).length,
+      debugSymbols: findings.filter(({ detail }) => detail.kind === 'debug-symbols').length,
       addresses: addresses.length,
     };
     return { addresses, totals };
+  }
+
+  /** What was met and could not be read. It changes how everything after it reads, so it comes first. */
+  function listUnread(result) {
+    const unread = [];
+    if (result.unopenedContainers.length > 0) {
+      const names = capWith(result.unopenedContainers, MAX_LISTED_PATHS, t.andMore);
+      unread.push(t.unopenedContainers(result.unopenedContainers.length, names.join(', ')));
+      if (result.unopenedContainers.some((name) => /\.dmg$/i.test(name))) unread.push(t.diskImageHint);
+    }
+    if (result.skippedLargeFiles.length > 0) unread.push(t.skippedLarge(result.skippedLargeFiles.length));
+    if (result.unreadableArchives.length > 0) unread.push(t.unreadableArchives(result.unreadableArchives.length));
+    if (result.skippedOtherOrigins > 0) unread.push(t.skippedOtherOrigins(result.skippedOtherOrigins));
+    // On disk, what is left after those was passed over for its kind.
+    const namedCount = result.unopenedContainers.length + result.skippedLargeFiles.length + result.unreadableArchives.length;
+    const passedOver = result.filesSeen - result.filesScanned - namedCount;
+    if (!result.isDeployed && passedOver > 0) unread.push(t.textless(passedOver));
+    return unread;
+  }
+
+  /**
+   * What cannot be hidden is said about what was read: with nothing read it is beside the
+   * point, and what holds for programs is said where a program was read. `measure` runs
+   * rea's JavaScript analysis on files someone holds, so it is offered only where that applies.
+   */
+  function listLimits(result) {
+    if (result.risk === 'unrated') return [];
+    const limits = [...t.limits];
+    if (result.programsScanned > 0) limits.push(t.namesThatStay);
+    if (result.scriptsScanned > 0 && !result.isDeployed) limits.push(t.measureHint);
+    return limits;
+  }
+
+  function describeUnreachable(reason) {
+    const kind = reason.startsWith('HTTP ') ? 'HTTP' : reason;
+    return Object.hasOwn(t.unreachableReasons, kind) ? `${t.unreachableReasons[kind]} (${reason})` : reason;
   }
 
   function renderRule(rule, findings, isDeployed) {
@@ -557,15 +732,21 @@ export function createReporter(language) {
       const targets = isDeployed
         ? result.root
         : result.targets.map((target) => toDisplayPath(result.root, target)).join(', ');
+      const asides = [];
+      if (result.filesSeen > result.filesScanned) asides.push(t.ofSeen(result.filesSeen));
+      if (result.programsScanned > 0) asides.push(t.programsAmong(result.programsScanned));
+      const scanned = t.scanned(result.filesScanned);
       const lines = [
-        t.target(targets),
-        t.scanned(result.filesScanned),
+        result.targetsPickedByName ? `${t.target(targets)} ${t.pickedByName}` : t.target(targets),
+        asides.length > 0 ? `${scanned} (${asides.join(', ')})` : scanned,
+        ...indent(listUnread(result)),
         '',
         `${t.riskLabel}: ${t.riskLevels[result.risk]}`,
         INDENT + t.riskSummaries[result.risk],
-        `${t.leaksLabel}: ${describeLeaks(result.leaks)}`,
-        '',
       ];
+      // With nothing read, "none found" would read as "clean".
+      if (result.risk !== 'unrated') lines.push(`${t.leaksLabel}: ${describeLeaks(result.leaks)}`);
+      lines.push('');
 
       for (const rule of Object.keys(t.rules)) {
         const findings = findingsByRule.get(rule);
@@ -574,16 +755,10 @@ export function createReporter(language) {
       if (result.findings.some(({ rule }) => SOURCE_MAP_RULES.has(rule))) {
         lines.push(...nextBuildHints(result.frameworks), '');
       }
-      lines.push(`[${t.severity.info}] ${t.limitsTitle}`, ...indent(t.limits));
-      if (isDeployed) lines.push('', t.deployedScope);
-      if (result.skippedOtherOrigins > 0) lines.push(t.skippedOtherOrigins(result.skippedOtherOrigins));
-      if (result.skippedLargeFiles.length > 0) {
-        lines.push('', t.skippedLarge(result.skippedLargeFiles.length));
-      }
-      if (result.unreadableArchives.length > 0) {
-        lines.push('', t.unreadableArchives(result.unreadableArchives.length));
-      }
-      return lines.join('\n');
+      const limits = listLimits(result);
+      if (limits.length > 0) lines.push(`[${t.severity.info}] ${t.limitsTitle}`, ...indent(limits), '');
+      if (isDeployed) lines.push(t.deployedScope);
+      return lines.join('\n').trimEnd();
     },
 
     fixPlan(root, mapPaths) {
@@ -596,6 +771,7 @@ export function createReporter(language) {
         t.fixDone(applied.movedCount),
         `${t.riskLabel}: ${t.riskLevels[before.risk]} → ${t.riskLevels[after.risk]}`,
         `${t.leaksLabel}: ${describeLeaks(before.leaks)} → ${describeLeaks(after.leaks)}`,
+        ...listUnread(after),
         t.backupAt(applied.backupDir),
         t.undoHint,
         '',
@@ -642,13 +818,21 @@ export function createReporter(language) {
           fixCommand: findings.some(isFixable) ? FIX_COMMAND : null,
         };
       }
-      return { risk: t.riskSummaries[result.risk], rules, limits: t.limits };
+      return { risk: t.riskSummaries[result.risk], unread: listUnread(result), rules, limits: listLimits(result) };
     },
 
-    scanError(error) {
-      return t.errors[error.code](error.path, error.buildCommand?.join(' ')).join('\n');
+    /** @returns {string | null} the line a text answer closes with when the command does not end with 0 */
+    closing(exitCode, failOn) {
+      return t.closings[exitCode]?.(failOn, t.severityName[failOn]) ?? null;
+    },
+
+    scanError({ code, path, details }) {
+      const lines = t.errors[code](path, details);
+      if (details.reason) lines.push(t.because(describeUnreachable(details.reason)));
+      return lines.join('\n');
     },
     measureFailed: (error) => t.measureFailed(error.message),
-    usageError: (error) => `${t.usageError(error.message)}\n\n${t.help.join('\n')}`,
+    usageError: (error) => t.usageError(error.message),
+    failOnError: t.failOnError,
   };
 }
