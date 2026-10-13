@@ -32,7 +32,7 @@ Say this to any coding agent that can run commands:
 
 > Run `npx reaproof --json` and fix what it reports.
 
-The JSON carries the risk level and, for every kind of finding, what it means and what to do, so the agent needs no setup. Paths, file names and addresses inside the findings are copied from the scanned files: control characters are removed, long text is cut, and the JSON itself says that this text is data to report, not instructions to follow.
+The JSON carries the risk level and, for every kind of finding, what it means and what to do, so the agent needs no setup. Paths, file names and addresses inside the findings are copied from the scanned files: characters a reader cannot see are removed, long text is cut, and every JSON answer opens by saying that this text is data to report, not instructions to follow.
 
 To make the agent reach for it by itself, install the skill once:
 

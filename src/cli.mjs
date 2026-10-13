@@ -6,6 +6,7 @@ import { MeasureError, measureWithRea, REA_PACKAGE } from './measure.mjs';
 import { isWebAddress, scanDeployedSite } from './remote.mjs';
 import { createReporter, pickLanguage } from './report.mjs';
 import { resolveTargets, scan, ScanError, withoutFiles } from './scan.mjs';
+import { toPrintable, toVisibleJson } from './text.mjs';
 
 const COMMANDS = { scan: runScan, fix: runFix, undo: runUndo, measure: runMeasure };
 const EXIT_OK = 0;
@@ -25,10 +26,16 @@ const EXIT_USAGE = 2;
 
 /**
  * @param {string[]} argv arguments after the program name
- * @param {Terminal} terminal
+ * @param {Terminal} outside
  * @returns {Promise<number>} the exit code
  */
-export async function main(argv, terminal) {
+export async function main(argv, outside) {
+  // Whatever a path, a message or another program's output carries, nothing unseen gets out.
+  const terminal = {
+    ...outside,
+    print: (text) => outside.print(toPrintable(text)),
+    printError: (text) => outside.printError(toPrintable(text)),
+  };
   let parsed;
   try {
     parsed = parseArgs({
@@ -86,7 +93,7 @@ async function runScan(target, options, report, terminal) {
   const result = isWebAddress(target)
     ? await scanDeployedSite(target)
     : await scanOrOfferBuild(resolve(target), ask, report, terminal);
-  terminal.print(options.json ? toJson(withExplanation(result, report)) : report.scan(result));
+  terminal.print(options.json ? toJson(withExplanation(result, report), report) : report.scan(result));
 
   // A deployed result plans nothing: none of its findings is a file on disk.
   const mapPaths = planFix(result);
@@ -119,13 +126,13 @@ async function runFix(target, options, report, terminal) {
   const before = scan(root);
   const mapPaths = planFix(before);
   if (mapPaths.length === 0) {
-    terminal.print(options.json ? toJson({ movedCount: 0, before }) : report.nothingToFix);
+    terminal.print(options.json ? toJson({ movedCount: 0, before }, report) : report.nothingToFix);
     return exitCodeFor(before);
   }
 
   if (!options.yes) {
     if (options.json) {
-      terminal.print(toJson({ needsApproval: true, mapPaths }));
+      terminal.print(toJson({ needsApproval: true, mapPaths }, report));
       return EXIT_USAGE;
     }
     terminal.print(report.fixPlan(root, mapPaths));
@@ -145,17 +152,17 @@ function takeOutMaps(before, mapPaths, options, report, terminal) {
   const applied = applyFix(before.root, mapPaths);
   // The moved files are the only change, so the rest of the output is not read again.
   const after = withoutFiles(before, mapPaths);
-  terminal.print(options.json ? toJson({ ...applied, before, after }) : report.fixDone(before, after, applied));
+  terminal.print(options.json ? toJson({ ...applied, before, after }, report) : report.fixDone(before, after, applied));
   return exitCodeFor(after);
 }
 
 function runUndo(target, options, report, terminal) {
   const outcome = undoLastFix(toLocalRoot(target));
   if (!outcome) {
-    terminal.print(options.json ? toJson({ restored: [], conflicts: [] }) : report.nothingToUndo);
+    terminal.print(options.json ? toJson({ restored: [], conflicts: [] }, report) : report.nothingToUndo);
     return EXIT_OK;
   }
-  terminal.print(options.json ? toJson(outcome) : report.undo(outcome));
+  terminal.print(options.json ? toJson(outcome, report) : report.undo(outcome));
   return EXIT_OK;
 }
 
@@ -165,7 +172,7 @@ async function runMeasure(target, options, report, terminal) {
   // rea is someone else's program: it is downloaded and run only after a yes.
   if (!options.yes) {
     if (options.json) {
-      terminal.print(toJson({ needsApproval: true, downloadsAndRuns: REA_PACKAGE }));
+      terminal.print(toJson({ needsApproval: true, downloadsAndRuns: REA_PACKAGE }, report));
       return EXIT_USAGE;
     }
     if (!terminal.ask) {
@@ -180,7 +187,7 @@ async function runMeasure(target, options, report, terminal) {
   if (!options.json) terminal.printError(report.measureNotice);
   const measurements = targets.map((measured) => ({ target: measured, ...measureWithRea(measured) }));
   if (options.json) {
-    terminal.print(toJson(measurements));
+    terminal.print(toJson({ measurements }, report));
     return EXIT_OK;
   }
   for (const { target: measured, ...summary } of measurements) {
@@ -204,6 +211,10 @@ function readPackageVersion() {
   return JSON.parse(readFileSync(manifestUrl, 'utf8')).version;
 }
 
-function toJson(value) {
-  return JSON.stringify(value, null, 2);
+/**
+ * Every JSON answer opens with the caution, so a reader meets it before any text that was
+ * copied from a scanned file.
+ */
+function toJson(value, report) {
+  return toVisibleJson({ caution: report.caution, ...value });
 }
