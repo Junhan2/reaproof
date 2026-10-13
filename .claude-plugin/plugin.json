@@ -1,0 +1,19 @@
+{
+  "name": "reaproof",
+  "version": "0.3.0",
+  "description": "Checks what AI reverse-engineering agents such as rea can read from the app you ship, rates the risk, and closes what can be closed.",
+  "author": {
+    "name": "Junhan2",
+    "url": "https://github.com/Junhan2"
+  },
+  "homepage": "https://github.com/Junhan2/reaproof#readme",
+  "repository": "https://github.com/Junhan2/reaproof",
+  "license": "MIT",
+  "keywords": [
+    "security",
+    "source-maps",
+    "reverse-engineering",
+    "rea",
+    "skills"
+  ]
+}

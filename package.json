@@ -1,0 +1,40 @@
+{
+  "name": "reaproof",
+  "version": "0.3.0",
+  "description": "One command that shows what AI reverse-engineering agents can read from your shipped app, and closes what can be closed.",
+  "keywords": [
+    "security",
+    "source-maps",
+    "secrets",
+    "reverse-engineering",
+    "rea",
+    "electron",
+    "cli"
+  ],
+  "homepage": "https://github.com/Junhan2/reaproof#readme",
+  "bugs": {
+    "url": "https://github.com/Junhan2/reaproof/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Junhan2/reaproof.git"
+  },
+  "license": "MIT",
+  "author": "Junhan2",
+  "type": "module",
+  "bin": {
+    "reaproof": "bin/reaproof.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.3"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

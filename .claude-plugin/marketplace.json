@@ -1,0 +1,14 @@
+{
+  "name": "reaproof",
+  "owner": {
+    "name": "Junhan2"
+  },
+  "description": "One command that rates how exposed a shipped app is to AI reverse-engineering agents such as rea, and closes what can be closed.",
+  "plugins": [
+    {
+      "name": "reaproof",
+      "source": ".",
+      "description": "A skill that runs the Reaproof check on a web, Electron or macOS build, explains each finding in plain words and applies the fixes after approval."
+    }
+  ]
+}
