@@ -6,8 +6,6 @@ Tools such as [rea](https://github.com/morluto/rea) let a coding agent inspect a
 
 It is written for people who have never dealt with security before. There is nothing to install and nothing to configure. It needs Node.js 18.3 or later.
 
-> The npm package is not live yet. Until it is, type `npx github:Junhan2/reaproof` wherever this page says `npx reaproof`. It runs the same code straight from this repository.
-
 ## Three ways to use it
 
 ### Yourself
