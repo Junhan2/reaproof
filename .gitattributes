@@ -1,0 +1,2 @@
+# One line ending everywhere, so a checkout on Windows holds the same bytes as any other.
+* text=auto eol=lf
