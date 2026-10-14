@@ -276,12 +276,17 @@ function textBeforeZero(bytes, encoding) {
   return bytes.toString(encoding, 0, end === -1 ? bytes.length : end);
 }
 
-/** Notes where the sections that hold names sit, of those one segment command lists. */
+/**
+ * Notes where the sections that hold names sit, of those one segment command lists. The
+ * names are a note beside what else the program says, so a list that does not hold what it
+ * counts is read as far as it goes and never fails the program.
+ */
 function collectNameSections(segment, { firstAt, countAt, entryBytes, readSize, offsetAt }, nameSections) {
+  if (segment.length < firstAt) return;
   const sectionCount = segment.readUInt32LE(countAt);
   for (let index = 0; index < sectionCount; index += 1) {
     const entry = segment.subarray(firstAt + index * entryBytes, firstAt + (index + 1) * entryBytes);
-    if (entry.length < entryBytes) throw new Error('a segment lists more sections than it holds');
+    if (entry.length < entryBytes) return;
     const name = textBeforeZero(entry.subarray(0, SECTION_NAME_BYTES), 'latin1');
     if (NAME_SECTIONS.has(name)) nameSections.set(name, { offset: entry.readUInt32LE(offsetAt), bytes: readSize(entry) });
   }
@@ -293,8 +298,13 @@ function collectNameSections(segment, { firstAt, countAt, entryBytes, readSize, 
  * @returns {KeptNames}
  */
 function readKeptNames(read, sections) {
-  const stringsIn = (name) => {
+  // A section that does not lie inside the file, all of it, holds nothing to count.
+  const sectionWithin = (name) => {
     const section = sections.get(name);
+    return section && section.offset + section.bytes <= read.bytes ? section : null;
+  };
+  const stringsIn = (name) => {
+    const section = sectionWithin(name);
     if (!section) return [];
     const bytes = read(section.offset, Math.min(section.bytes, MAX_NAME_SECTION_BYTES));
     return bytes.toString('latin1').split('\0').filter(Boolean);
@@ -303,7 +313,7 @@ function readKeptNames(read, sections) {
   const methodNames = stringsIn(OBJC_METHOD_NAMES).filter((name) => NAME.test(name));
   const fieldNames = stringsIn(SWIFT_FIELD_NAMES);
   const swiftTypes = SWIFT_TYPE_RECORDS.reduce(
-    (sum, name) => sum + Math.floor((sections.get(name)?.bytes ?? 0) / SWIFT_TYPE_RECORD_BYTES),
+    (sum, name) => sum + Math.floor((sectionWithin(name)?.bytes ?? 0) / SWIFT_TYPE_RECORD_BYTES),
     0,
   );
   const memberNames = [...new Set([...fieldNames, ...methodNames])];

@@ -5,7 +5,7 @@ What changed in each release published to npm, newest first.
 ## 0.5.0 (not published yet)
 
 - Opens ZIP archives, told by how the file opens and not by its name (`.zip`, `.ipa`, `.apk`, `.aab`, `.jar`, `.msix` and others), and archives inside archives, three deep. Each file in one is read as if it lay on disk, and nothing is unpacked to disk.
-- Does not trust an archive about itself: a file in one cannot come out larger than it states, at most 2 GB is read out of one archive, and one that lists more than 250,000 files or folders is not opened. A file inside an archive is read up to 512 MB (it was 30 MB inside an ASAR).
+- Does not trust an archive about itself: a file in one cannot come out larger than it states, at most 2 GB is read out of one archive with every file counting for at least 2 kB of that, and one that lists more than 250,000 files or folders is not opened. A file inside an archive is read up to 512 MB (it was 30 MB inside an ASAR).
 - Counts the names that stay in a macOS or iOS program after stripping (Swift types, properties and enum cases, Objective-C classes and methods) and lists them as a note. On a test program rea 6.4.0 listed the same classes before and after `strip`.
 - Fixes a false finding on Next.js builds: the page list the framework writes (`_buildManifest.js`, seen with Next.js 16.2) was taken for code left unminified.
 - Names files that could not be opened (no permission, a password, a kind of compression that is not undone) instead of counting them with pictures. Gives no rating when no file's content was read, or when something was left unread and no program or script was read beside it.

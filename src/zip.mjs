@@ -33,9 +33,11 @@ const MAX_ENTRIES = 250_000;
 // One entry can name thousands of folders that hold nothing but each other, and each is
 // kept in memory, so folders are counted as well as files.
 const MAX_FOLDERS = 250_000;
-// Deflate cannot make data much larger than it was. An entry that says its packed form is
-// far larger than its contents is not telling the truth about one of the two.
-const MAX_PACKED_OVERHEAD_BYTES = 64 * 1024;
+// Deflate at its worst makes data an eighth larger than it was, and a few bytes more to
+// open and close. Twice that is allowed for: an entry that says its packed form is larger
+// still is not telling the truth about one of its two sizes.
+const MAX_PACKED_GROWTH = 1 / 4;
+const MAX_PACKED_FRAME_BYTES = 64;
 // The smallest output buffer zlib takes.
 const MIN_INFLATE_CHUNK_BYTES = 64;
 
@@ -197,7 +199,8 @@ function decodeName(bytes) {
 function readEntry(source, file) {
   if (file.isEncrypted) throw new Error('the entry is encrypted');
   if (file.method !== STORED && file.method !== DEFLATED) throw new Error(`compression method ${file.method} is not read`);
-  const packedLimit = file.method === STORED ? file.size : file.size + MAX_PACKED_OVERHEAD_BYTES;
+  const packedLimit =
+    file.method === STORED ? file.size : file.size + Math.ceil(file.size * MAX_PACKED_GROWTH) + MAX_PACKED_FRAME_BYTES;
   if (file.packedBytes > packedLimit) throw new Error('an entry is packed larger than it can be');
 
   const header = source.read(file.headerOffset, LOCAL_HEADER_BYTES);
@@ -208,6 +211,8 @@ function readEntry(source, file) {
   if (file.method === STORED || file.size === 0) return packed.subarray(0, file.size);
   // Inflating stops with an error where the output would pass the size the entry states.
   // It is given room for all of it at once: gathered in small pieces, the output would be
-  // held twice over while the pieces are joined.
-  return inflateRawSync(packed, { maxOutputLength: file.size, chunkSize: Math.max(file.size, MIN_INFLATE_CHUNK_BYTES) });
+  // held twice over while the pieces are joined. One byte more than that keeps zlib, which
+  // sets aside another piece whenever one is full, from setting aside a second whole one.
+  const chunkSize = Math.max(file.size + 1, MIN_INFLATE_CHUNK_BYTES);
+  return inflateRawSync(packed, { maxOutputLength: file.size, chunkSize });
 }

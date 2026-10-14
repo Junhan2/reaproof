@@ -11,7 +11,7 @@ import { main } from '../src/cli.mjs';
 import { applyFix, planFix, undoLastFix } from '../src/fix.mjs';
 import { toWindowsShellArgument } from '../src/measure.mjs';
 import { scanDeployedSite } from '../src/remote.mjs';
-import { CHUNK_BYTES, MAX_UNPACKED_BYTES, OVERLAP_BYTES, scan, ScanError, withoutFiles } from '../src/scan.mjs';
+import { CHUNK_BYTES, FILE_COST_BYTES, MAX_UNPACKED_BYTES, OVERLAP_BYTES, scan, ScanError, withoutFiles } from '../src/scan.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../bin/reaproof.mjs', import.meta.url));
 const MAP_WITH_SOURCES = JSON.stringify({
@@ -1738,8 +1738,8 @@ test('what an archive holds but will not give up is named, and without it there 
 });
 
 test('an archive that states far more than it weighs is read up to a limit, smallest files first', (t) => {
-  // Four of these come to the limit exactly.
-  const statedBytes = MAX_UNPACKED_BYTES / 4;
+  // Four of these come to the limit exactly, with what looking at each one counts for.
+  const statedBytes = MAX_UNPACKED_BYTES / 4 - FILE_COST_BYTES;
   const claims = Object.fromEntries(
     Array.from({ length: 10 }, (_, index) => [`blob${index}.bin`, { content: '', isStored: true, statedBytes }]),
   );
@@ -1752,12 +1752,14 @@ test('an archive that states far more than it weighs is read up to a limit, smal
     'notes/app.zip': buildZip({ 'vast.bin': vast, 'notes.txt': 'hello\n' }),
     // Two archives in one: what the first unpacks is no longer there for the second.
     'nested/outer.zip': buildZip({ 'one.zip': buildZip(claims), 'two.zip': buildZip(claims) }),
+    'crowd/outer.zip': crowded(),
   });
 
   const claimsOnly = scan(join(root, 'claims'));
   const withProgram = scan(join(root, 'app'));
   const withNotes = scan(join(root, 'notes'));
   const nested = scan(join(root, 'nested'));
+  const crowd = scan(join(root, 'crowd'));
 
   // The four within the limit turn out not to be there; the other six and the vast one are not unpacked at all.
   assert.deepEqual([claimsOnly.unreadableFiles.length, claimsOnly.skippedLargeFiles.length, claimsOnly.risk], [4, 7, 'unrated']);
@@ -1769,7 +1771,27 @@ test('an archive that states far more than it weighs is read up to a limit, smal
   // With a note read and the one large file not, nothing is said about what ships.
   assert.deepEqual([withNotes.skippedLargeFiles, withNotes.unreadableFiles, withNotes.risk], [['app.zip:/vast.bin'], [], 'unrated']);
   assert.deepEqual([nested.archivesOpened, nested.unreadableFiles.length, nested.skippedLargeFiles.length], [3, 3, 17]);
+  // Read: the two archives and twenty of the notes. Not read: the forty other notes and the padding.
+  assert.deepEqual([crowd.filesScanned, crowd.unreadableFiles.length, crowd.skippedLargeFiles.length], [22, 2047, 41]);
 });
+
+/**
+ * An archive in which files that hold next to nothing run into the limit. Claims that turn
+ * out not to be there use up all of it but what the inner archive weighs and what looking
+ * at twenty of its sixty one-byte notes counts for.
+ */
+function crowded() {
+  const megabyte = 1024 * 1024;
+  const notes = Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`note${index}.txt`, 'x']));
+  // The padding makes the inner archive the largest file, so that it is read last.
+  const inner = buildZip({ ...notes, 'pad.bin': { content: Buffer.alloc(megabyte + megabyte / 8), isStored: true } });
+  const claim = (statedBytes) => ({ content: '', isStored: true, statedBytes });
+  // Each of these counts for a megabyte exactly.
+  const claims = Array.from({ length: 2046 }, (_, index) => [`blob${index}.bin`, claim(megabyte - FILE_COST_BYTES)]);
+  const left = MAX_UNPACKED_BYTES - claims.length * megabyte;
+  const filler = left - 2 * FILE_COST_BYTES - inner.length - 20 * (FILE_COST_BYTES + 1);
+  return buildZip([['filler.bin', claim(filler)], ...claims, ['inner.zip', inner]]);
+}
 
 const canZip = spawnSync('zip', ['-v']).status === 0;
 
@@ -1801,6 +1823,14 @@ test("an archive written by the system's own zip is read the same as the folder 
 test('names that stay in a stripped program are counted in a note that says which a setting can take out', (t) => {
   const signature = { flags: HARDENED_RUNTIME };
   const stripped = { symbols: [{ type: EXPORTED_NAME, name: '__mh_execute_header' }], signature };
+  // Two programs that kept their development names and were never signed, each with one
+  // list of names that is not as it says: one lies far past the end of the file, the other
+  // is in a segment that counts a thousand sections and holds the one.
+  const unsigned = () => buildMachO({ symbols: names(LOCAL_NAME, 150), sections: { __objc_classname: cStrings('ReceiptPrinter') } });
+  const misplaced = unsigned();
+  misplaced.writeUInt32LE(0xfffffff0, misplaced.indexOf('__objc_classname') + 48);
+  const overcounted = unsigned();
+  overcounted.writeUInt32LE(1000, overcounted.indexOf('__TEXT') + 56);
   const root = makeProject(t, {
     // Two builds in one file: the one with the most names speaks for it.
     'Shop.app/Contents/MacOS/Shop': buildUniversal([
@@ -1828,9 +1858,12 @@ test('names that stay in a stripped program are counted in a note that says whic
       sections: { __objc_classname: cStrings('ReceiptPrinter'), __objc_methname: cStrings('printReceipt:') },
     }),
     'linux/server': linuxProgram(4096),
+    'damaged/misplaced': misplaced,
+    'damaged/overcounted': overcounted,
   });
 
   const result = scan(join(root, 'Shop.app'));
+  const damaged = scan(join(root, 'damaged'));
   const swiftReport = runCli([join(root, 'Shop.app'), '--lang', 'en']).stdout;
   const objcReport = runCli([join(root, 'Printer.app'), '--lang', 'en']).stdout;
   const linuxReport = runCli([join(root, 'linux'), '--lang', 'en']).stdout;
@@ -1859,6 +1892,17 @@ test('names that stay in a stripped program are counted in a note that says whic
   );
   // What cannot be closed is a note: the result is not rated worse for it.
   assert.equal(result.risk, 'baseline');
+  // A list of names that cannot be read costs the note at most, never what else the program says.
+  assert.deepEqual(
+    damaged.findings.map(({ rule, path }) => [rule, path]).sort(),
+    [
+      ['kept-names', 'overcounted'],
+      ['macos-runtime', 'misplaced'],
+      ['macos-runtime', 'overcounted'],
+      ['native-symbols', 'misplaced'],
+      ['native-symbols', 'overcounted'],
+    ],
+  );
   assert.match(
     swiftReport,
     /- Contents\/MacOS\/Shop \(arm64: 5 type names, for example OrderClient · 4 names of properties and methods, for example submitOrderWithSubtotalCents:discountCents:\)/,

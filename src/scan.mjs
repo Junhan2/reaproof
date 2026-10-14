@@ -30,6 +30,10 @@ const MAX_HELD_BYTES = 512 * 1024 * 1024;
 // The most that is read out of one archive on disk, with everything nested in it. An
 // archive can state far more than it weighs, so its own size bounds nothing.
 export const MAX_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024;
+// What looking at one file in an archive counts for, of that, however little the file
+// holds. Archives can hold one another many times over, and would otherwise list files
+// without end at no cost.
+export const FILE_COST_BYTES = 2048;
 // An archive in an archive in an archive is still opened. One more level down is left shut.
 const MAX_ARCHIVE_DEPTH = 3;
 // A chunk read as text stays in V8's own heap, and is freed at once, only under about a
@@ -248,6 +252,7 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
   const { result } = state;
   const extension = extname(name).toLowerCase();
   result.filesSeen += 1;
+  if (within) within.budget.left -= FILE_COST_BYTES;
   addFindings(state, checkPath({ path: displayPath, name, extension, isInsideAsar: within?.isAsar ?? false }), diskPath);
   if (isTextless({ name, extension })) return;
 
@@ -378,7 +383,9 @@ function scanBytes({ displayPath, diskPath, source }, state) {
     state.result.programsScanned += 1;
   }
 
-  if (images) addFindings(state, checkMachO(displayPath, images), diskPath);
+  // A name a finding shows is cut out of all the names of its section, and kept as it is
+  // would keep the whole section in memory until the scan is done.
+  if (images) addFindings(state, structuredClone(checkMachO(displayPath, images)), diskPath);
   // The same thing sits in each architecture's build and where two chunks overlap, and is
   // one finding. Keys are told apart by the search itself; the rest by what they say.
   const seenKeys = new Set();
