@@ -1860,6 +1860,8 @@ test('names that stay in a stripped program are counted in a note that says whic
     'Shop.app/Contents/MacOS/Shop': shop,
     'twice/Shop.app/Contents/MacOS/Shop': shop,
     'twice/Shop.zip': buildZip({ 'Shop.app/Contents/MacOS/Shop': shop }),
+    // More types than the shop has, and fewer names in all: the two numbers said are of one file.
+    'twice/Other.app/Contents/MacOS/Other': buildMachO({ ...stripped, sections: { __swift5_types: Buffer.alloc(4 * 10) } }),
     // A program with nothing of the kind gets no note, and neither does a step of the build.
     'Shop.app/Contents/Helpers/tool': buildMachO(stripped),
     'Shop.app/Contents/Resources/step.o': buildMachO({ fileType: OBJECT, sections: { __objc_classname: cStrings('Leftover') } }),
@@ -1920,10 +1922,11 @@ test('names that stay in a stripped program are counted in a note that says whic
   );
   // The setting is named where it has something to take out, and the same thing is not said twice.
   assert.match(swiftReport, /Reflection Metadata Level set to Without Names/);
-  // The same program in a folder and in an archive of it is not counted twice over.
+  // The same program in a folder and in an archive of it is not counted twice over, and both
+  // numbers said are those of the program with the most names.
   assert.match(
     runCli([join(root, 'twice'), '--lang', 'en']).stdout,
-    /2 program file\(s\) hold names that stay after stripping: up to 5 type names and 6 names of properties and methods in one file/,
+    /3 program file\(s\) hold names that stay after stripping\. The one with the most holds 5 type names and 6 names of properties and methods/,
   );
   assert.doesNotMatch(objcReport, /Reflection Metadata Level/);
   assert.doesNotMatch(swiftReport, /A stripped program still carries/);

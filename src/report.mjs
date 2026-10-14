@@ -405,7 +405,7 @@ const EN = {
     'native-symbols': {
       title: 'Names meant for development are still in the program',
       body: ({ files, names, sources, builders }) => [
-        `${files} program file(s) keep the names of functions and variables, up to ${names} in one file. What the code does reads from the names alone.`,
+        `${files} program file(s) keep the names of functions and variables, ${names} in the one with the most. What the code does reads from the names alone.`,
         ...(builders > 0
           ? ['They also hold the paths of original files, which show the account name and folder layout of the machine that built them.']
           : []),
@@ -456,7 +456,7 @@ const EN = {
     'kept-names': {
       title: 'Names that stay in a program after stripping',
       body: ({ files, types, members, fieldNames }) => [
-        `${files} program file(s) hold names that stay after stripping: up to ${types} type names and ${members} names of properties and methods in one file, among them the names of system frameworks the program uses. The program uses them while it runs, so strip does not take them out, and a tool like rea reads the classes and what is inside them from these names.`,
+        `${files} program file(s) hold names that stay after stripping. The one with the most holds ${types} type names and ${members} names of properties and methods, among them the names of system frameworks the program uses. The program uses them while it runs, so strip does not take them out, and a tool like rea reads the classes and what is inside them from these names.`,
         'Hiding names leaves the logic where it is. Move logic that must stay private to a server.',
         ...(fieldNames > 0
           ? [
@@ -689,15 +689,17 @@ export function createReporter(language) {
     // An address list is about the addresses, not about which file each one sits in.
     const addresses = [...new Set(findings.flatMap(({ detail }) => detail.addresses ?? []))];
     const sumOf = (field) => findings.reduce((sum, { detail }) => sum + (detail[field] ?? 0), 0);
-    // A program met in a folder and again in an archive of it would count twice in a sum.
-    const mostOf = (field) => findings.reduce((most, { detail }) => Math.max(most, detail[field] ?? 0), 0);
+    // A program met in a folder and again in an archive of it would count twice in a sum, so
+    // what is said is the count of one file: the one with the most, both numbers from it.
+    const namesOf = ({ detail }) => (detail.names ?? 0) + (detail.types ?? 0) + (detail.members ?? 0);
+    const fullest = findings.reduce((most, finding) => (namesOf(finding) > namesOf(most) ? finding : most), findings[0]);
     const totals = {
       files: findings.length,
       embedded: sumOf('embeddedCount'),
       sources: sumOf('sourceCount'),
-      names: mostOf('names'),
-      types: mostOf('types'),
-      members: mostOf('members'),
+      names: fullest?.detail.names ?? 0,
+      types: fullest?.detail.types ?? 0,
+      members: fullest?.detail.members ?? 0,
       fieldNames: sumOf('swiftFieldNames'),
       builders: findings.filter(({ detail }) => detail.namesBuilder).length,
       debugSymbols: findings.filter(({ detail }) => detail.kind === 'debug-symbols').length,
