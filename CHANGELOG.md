@@ -14,6 +14,7 @@ What changed in each release published to npm, newest first.
 - Names the Xcode settings that strip a program, and that they do so only with Deployment Postprocessing on.
 - Counts the names a program keeps once when the same program is met twice, in a folder and in an archive of it, and says how many archives it opened.
 - The README says what the fixes were measured to change, with rea 6.4.0, and what was not measured.
+- Agent skill: `kept-names` is a note to report, not something to fix by renaming or obfuscating code, and leaving out Swift property names is the user's call.
 
 ## 0.4.0 (2026-10-13)
 
