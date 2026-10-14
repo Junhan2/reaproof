@@ -266,6 +266,10 @@ function installFakeRea(t, evidence) {
   ].join('\n');
   writeFileSync(join(binDir, 'npx'), script);
   chmodSync(join(binDir, 'npx'), 0o755);
+  // Windows starts a command through its shell, which looks for a command file by that name.
+  if (process.platform === 'win32') {
+    writeFileSync(join(binDir, 'npx.cmd'), `@echo off\r\n"${process.execPath}" "${join(binDir, 'npx')}" %*\r\n`);
+  }
   const readCalls = () => (existsSync(callsPath) ? readFileSync(callsPath, 'utf8').trim().split('\n').map(JSON.parse) : []);
   return { env: { PATH: `${binDir}${delimiter}${process.env.PATH}` }, readCalls };
 }
