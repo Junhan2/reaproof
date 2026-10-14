@@ -361,7 +361,7 @@ function scanText({ displayPath, extension, diskPath, source }, state) {
  * opens with a UTF-16 mark would read as every other character missing.
  */
 function decodeText(bytes) {
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString('utf16le', 2);
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return utf16Text(bytes.subarray(2));
   if (bytes[0] === 0xfe && bytes[1] === 0xff) {
     // Node reads UTF-16 low byte first, so a copy has each pair of bytes swapped.
     const pairs = Buffer.from(bytes.subarray(2, bytes.length - (bytes.length % 2)));
@@ -429,8 +429,18 @@ function holdsZeroByte(source) {
 function* readAsText(bytes, isText) {
   yield bytes.toString('latin1');
   if (isText) return;
-  yield bytes.toString('utf16le');
-  yield bytes.subarray(1).toString('utf16le');
+  yield utf16Text(bytes);
+  yield utf16Text(bytes.subarray(1));
+}
+
+/**
+ * Bytes read two to a character. Only whole pairs are decoded, which is what Node does with
+ * a byte left over anyway. Node 24.21.0 on Linux and Windows corrupts its own memory when
+ * it decodes an odd number of bytes that start at an odd place in their buffer, and the
+ * reading that starts on the second byte of a stretch starts at just such a place.
+ */
+function utf16Text(bytes) {
+  return bytes.subarray(0, bytes.length - (bytes.length % 2)).toString('utf16le');
 }
 
 /** Everything a finding quotes from a file is cleaned here; `diskPath` stays exact, for acting on the file. */
