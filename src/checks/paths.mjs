@@ -12,8 +12,9 @@ const STRAY_SEVERITY = { env: 'critical', git: 'critical', 'key-file': 'critical
 const ALWAYS_SOURCE_EXTENSIONS = new Set(['.tsx', '.vue', '.svelte']);
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const DEVELOPER_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.py', '.sh', '.rb', '.pl', '.ps1']);
-// Disk images, installers and archives hold the real files inside a format this scanner
-// does not open. A lone compressed file such as `app.js.gz` is not one of them.
+// Disk images, installers and archives hold the real files inside. A file named like one
+// is opened when it turns out to be a ZIP, and is otherwise listed as not opened. A lone
+// compressed file such as `app.js.gz` is not one of them.
 const SEALED_CONTAINER =
   /\.(?:dmg|pkg|xip|iso|zip|ipa|apk|aab|jar|7z|rar|msi|msix|appx|deb|rpm|appimage|tar|tgz|tar\.(?:gz|bz2|xz|zst))$/i;
 // Formats in which a search of the bytes has nothing to find: pictures, sound, video and
@@ -52,15 +53,16 @@ export function strayDirectoryKind(name) {
 /**
  * Source and test files that a build should have left behind.
  *
- * @param {{ path: string, name: string, extension: string, isInsideArchive: boolean }} file
+ * @param {{ path: string, name: string, extension: string, isInsideAsar: boolean }} file
  */
-export function checkUnshippedSource({ path, name, extension, isInsideArchive }) {
+export function checkUnshippedSource({ path, name, extension, isInsideAsar }) {
   const segments = path.split('/');
   if (TEST_FILE.test(name) || segments.includes('__tests__')) return [sourceFinding(path, 'test')];
   if (ALWAYS_SOURCE_EXTENSIONS.has(extension)) return [sourceFinding(path, 'source')];
-  // On a website `.ts` is usually a video segment; inside an app or under `src` it is TypeScript.
+  // On a website `.ts` is usually a video segment, also when the site is in a ZIP. In an
+  // Electron app's ASAR, which holds its code, or under `src` it is TypeScript.
   const isTypeScript = extension === '.ts' && !name.endsWith('.d.ts');
-  if (isTypeScript && (isInsideArchive || segments.includes('src'))) return [sourceFinding(path, 'source')];
+  if (isTypeScript && (isInsideAsar || segments.includes('src'))) return [sourceFinding(path, 'source')];
   return [];
 }
 
@@ -75,14 +77,20 @@ export function checkDeveloperFile({ path, extension }) {
   return [{ rule: 'developer-file', severity: 'info', path, detail: {} }];
 }
 
-/** Whether a file is a container whose contents stay unread, so that the report can say so. */
+/** Whether a file is named like a container. One that is a ZIP is opened; any other is listed as not opened. */
 export function isSealedContainer(name) {
   return SEALED_CONTAINER.test(name);
 }
 
-/** Whether a file is of a kind that reading would tell nothing about. Every other file is read. */
-export function isTextless(extension) {
-  return TEXTLESS_EXTENSIONS.has(extension);
+/**
+ * Whether a file is of a kind that reading would tell nothing about. Every other file is
+ * read. An archive compressed as a whole, a `.tar.gz`, is named like a compressed file and
+ * is a container all the same.
+ *
+ * @param {{ name: string, extension: string }} file
+ */
+export function isTextless({ name, extension }) {
+  return TEXTLESS_EXTENSIONS.has(extension) && !isSealedContainer(name);
 }
 
 /** A dotenv file that holds real values, as opposed to a template with the values left blank. */

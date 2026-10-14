@@ -32,6 +32,7 @@ The user may have no security background. Explain every finding by its effect on
 - `electron-fuse`: turn the listed fuses off at package time with `@electron/fuses`.
 - `macos-entitlement`, `macos-runtime`: sign the release without `get-task-allow` and with the Hardened Runtime. Each program in an app is signed by itself, so check the helper programs the finding names, not only the main one.
 - `native-symbols`: the program kept the names of its functions and variables. Strip it before it is signed, in the build or release script: plain `strip` for a program, `strip -x` for a library. Keep the `.dSYM` first. This changes how the user builds a release, so propose it and let them decide, then run the check again: the finding is gone when it worked.
+- `kept-names`: a note, not a leak. These names stay because the program uses them while it runs, and the count takes in the names of the system frameworks it uses. Do not rename or obfuscate code to make the note go away. Leaving out the names of Swift properties and cases is a build setting with a price, since code that turns such a name into text changes: mention it and let the user decide.
 - `developer-file`: a note, not a leak. List the files and ask whether they ship on purpose. If not, leave them out of the deploy.
 - `prompt-candidate`: a guess. If it is a prompt, move it to a server.
 - `endpoint`: a list, not a leak. Review with the user that each address checks who is calling.
