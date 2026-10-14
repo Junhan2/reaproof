@@ -1702,6 +1702,8 @@ test('what an archive holds but will not give up is named, and without it there 
     'empty/app.zip': buildZip({}),
     'mixed/app.zip': buildZip({ 'main.js': BUNDLE, 'extra.bin': { content: 'x', isEncrypted: true } }),
     'noted/app.zip': buildZip({ 'notes.txt': 'hello\n', 'main.js': { content: BUNDLE, isEncrypted: true } }),
+    // Archives four deep: the innermost is not opened.
+    'sunk/app.zip': buildZip({ 'notes.txt': 'hello\n', 'a.zip': buildZip({ 'b.zip': buildZip({ 'c.zip': buildZip({ 'main.js': BUNDLE }) }) }) }),
     'denied/settings.bin': 'not for this user',
   });
   chmodSync(join(root, 'denied/settings.bin'), 0o000);
@@ -1726,6 +1728,8 @@ test('what an archive holds but will not give up is named, and without it there 
   // A note read beside what stayed shut does not make a rating.
   assert.deepEqual(unread('cut'), ['unrated', [], ['app.zip']]);
   assert.deepEqual(unread('noted'), ['unrated', ['app.zip:/main.js'], []]);
+  const sunk = scan(join(root, 'sunk'));
+  assert.deepEqual([sunk.risk, sunk.nestedTooDeep], ['unrated', ['app.zip:/a.zip:/b.zip:/c.zip']]);
   // An archive with nothing in it was opened, and nothing was read.
   assert.deepEqual([empty.risk, empty.archivesOpened, empty.filesScanned], ['unrated', 1, 1]);
   // With code read beside it there is a rating, and what stayed shut is still named.
