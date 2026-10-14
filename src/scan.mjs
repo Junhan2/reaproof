@@ -383,9 +383,7 @@ function scanBytes({ displayPath, diskPath, source }, state) {
     state.result.programsScanned += 1;
   }
 
-  // A name a finding shows is cut out of all the names of its section, and kept as it is
-  // would keep the whole section in memory until the scan is done.
-  if (images) addFindings(state, structuredClone(checkMachO(displayPath, images)), diskPath);
+  if (images) addFindings(state, checkMachO(displayPath, images), diskPath);
   // The same thing sits in each architecture's build and where two chunks overlap, and is
   // one finding. Keys are told apart by the search itself; the rest by what they say.
   const seenKeys = new Set();

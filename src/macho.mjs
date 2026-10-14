@@ -325,10 +325,18 @@ function readKeptNames(read, sections) {
     objcClassNames: classNames.length,
     swiftFieldNames: fieldNames.length,
     objcMethodNames: methodNames.length,
-    sampleType: classNames.length > 0 ? plainClassName(classNames[0]) : null,
+    sampleType: classNames.length > 0 ? copied(plainClassName(classNames[0])) : null,
     // The longest of the first few says the most: a method name spells out what it takes.
-    sampleMember: memberNames.slice(0, 64).reduce((longest, name) => (name.length > longest.length ? name : longest), '') || null,
+    sampleMember: copied(memberNames.slice(0, 64).reduce((longest, name) => (name.length > longest.length ? name : longest), '') || null),
   };
+}
+
+/**
+ * A name cut out of the text of a whole section, as a string of its own. Kept as it was
+ * cut, it would keep all of that text in memory for as long as the finding is kept.
+ */
+function copied(name) {
+  return name === null ? null : Buffer.from(name, 'latin1').toString('latin1');
 }
 
 /** @returns {string} `OrderClient` for `_TtC4Shop11OrderClient`; any other name as it is */
