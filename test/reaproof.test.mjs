@@ -1342,7 +1342,7 @@ test('every file that can hold text is read, on disk and inside an archive alike
   );
   // The archive counts as one file read, and each file inside it is counted like one on disk.
   assert.deepEqual([result.filesSeen, result.filesScanned], [13, 11]);
-  assert.match(stdout, /Files read: 11 \(of 13 met\)\n  Not read: 2 file\(s\) such as pictures/);
+  assert.match(stdout, /Files read: 11 \(of 13 met, 1 of them archives, opened\)\n  Not read: 2 file\(s\) such as pictures/);
 });
 
 test('a container that is not opened is named first, and without the code that ships there is no rating', (t) => {
@@ -1677,7 +1677,8 @@ test('a ZIP archive is opened whatever it is called, and what is in it is read l
       ['secret', `${`sunk.zip:/${'a/'.repeat(12_000)}`.slice(0, 300)}…`],
     ],
   );
-  assert.deepEqual(odd.unopenedContainers, ['deep.zip:/level4:/level3:/level2']);
+  assert.deepEqual([odd.nestedTooDeep, odd.unopenedContainers], [['deep.zip:/level4:/level3:/level2'], []]);
+  assert.match(runCli([shapes, '--lang', 'en']).stdout, /Archives nested too deep to open: 1 \(deep\.zip:\/level4:\/level3:\/level2\)\. Archives inside archives are opened three deep/);
 });
 
 test('what an archive holds but will not give up is named, and without it there is no rating', (t) => {
@@ -1731,7 +1732,7 @@ test('what an archive holds but will not give up is named, and without it there 
   assert.deepEqual(unread('mixed'), ['baseline', ['app.zip:/extra.bin'], []]);
   if (canBeDenied) assert.deepEqual(unread('denied'), ['unrated', ['settings.bin'], []]);
   assert.equal(locked.status, 3);
-  assert.match(locked.stdout, /Files read: 1 \(of 2 met\)\n  Files that could not be opened: 1 \(app\.zip:\/main\.js\)\. No permission, a password/);
+  assert.match(locked.stdout, /Files read: 1 \(of 2 met, 1 of them archives, opened\)\n  Files that could not be opened: 1 \(app\.zip:\/main\.js\)\. No permission, a password/);
   // It is not counted a second time among the files passed over for their kind.
   assert.doesNotMatch(locked.stdout, /Not read: /);
   assert.match(cut.stdout, /Files read: 1 \(of 2 met\)\n  Archives that could not be read: 1 \(app\.zip\)/);
@@ -1831,25 +1832,30 @@ test('names that stay in a stripped program are counted in a note that says whic
   misplaced.writeUInt32LE(0xfffffff0, misplaced.indexOf('__objc_classname') + 48);
   const overcounted = unsigned();
   overcounted.writeUInt32LE(1000, overcounted.indexOf('__TEXT') + 56);
+  const shop = buildUniversal([
+    buildMachO({ ...stripped, cpuType: X86_64, sections: { __objc_classname: cStrings('ReceiptPrinter') } }),
+    buildMachO({
+      ...stripped,
+      sections: {
+        // A class written in Objective-C, two Swift classes in mangled form, and bytes that describe a layout.
+        // The example is a Swift class, which is named after the program's own module, though it is not the first.
+        __objc_classname: cStrings('ReceiptPrinter', '_TtC4Shop11OrderClient', '_TtC4Shop16LicenseValidator', '\x01\x11'),
+        // A method name, a property name that Swift lists too, and two type descriptions.
+        __objc_methname: cStrings('submitOrderWithSubtotalCents:discountCents:', 'endpoint', 'T@"NSURL",N,R', 'v16@0:8'),
+        // Two property names, a case name, a name a macro made and the name of an associated type.
+        __swift5_reflstr: cStrings('endpoint', 'loyaltyRate', 'bulk', '_$observationRegistrar', 'RawValue'),
+        // One four-byte record for each Swift type, in the two sections that list them:
+        // the two classes, a struct and an enum.
+        __swift5_types: Buffer.alloc(4 * 3),
+        __swift5_types2: Buffer.alloc(4),
+      },
+    }),
+  ]);
   const root = makeProject(t, {
     // Two builds in one file: the one with the most names speaks for it.
-    'Shop.app/Contents/MacOS/Shop': buildUniversal([
-      buildMachO({ ...stripped, cpuType: X86_64, sections: { __objc_classname: cStrings('ReceiptPrinter') } }),
-      buildMachO({
-        ...stripped,
-        sections: {
-          // Two Swift classes in mangled form, a class written in Objective-C, and bytes that describe a layout.
-          __objc_classname: cStrings('_TtC4Shop11OrderClient', '_TtC4Shop16LicenseValidator', 'ReceiptPrinter', '\x01\x11'),
-          // A method name, a property name that Swift lists too, and two type descriptions.
-          __objc_methname: cStrings('submitOrderWithSubtotalCents:discountCents:', 'endpoint', 'T@"NSURL",N,R', 'v16@0:8'),
-          __swift5_reflstr: cStrings('endpoint', 'loyaltyRate', 'bulk'),
-          // One four-byte record for each Swift type, in the two sections that list them:
-          // the two classes, a struct and an enum.
-          __swift5_types: Buffer.alloc(4 * 3),
-          __swift5_types2: Buffer.alloc(4),
-        },
-      }),
-    ]),
+    'Shop.app/Contents/MacOS/Shop': shop,
+    'twice/Shop.app/Contents/MacOS/Shop': shop,
+    'twice/Shop.zip': buildZip({ 'Shop.app/Contents/MacOS/Shop': shop }),
     // A program with nothing of the kind gets no note, and neither does a step of the build.
     'Shop.app/Contents/Helpers/tool': buildMachO(stripped),
     'Shop.app/Contents/Resources/step.o': buildMachO({ fileType: OBJECT, sections: { __objc_classname: cStrings('Leftover') } }),
@@ -1879,13 +1885,14 @@ test('names that stay in a stripped program are counted in a note that says whic
           architecture: 'arm64',
           // A Swift class is in both lists and is one type; a name in both lists is one name.
           types: 5,
-          members: 4,
+          members: 6,
           swiftTypes: 4,
           objcClassNames: 3,
-          swiftFieldNames: 3,
+          swiftFieldNames: 5,
           objcMethodNames: 2,
           sampleType: 'OrderClient',
-          sampleMember: 'submitOrderWithSubtotalCents:discountCents:',
+          // A name of the program's own: the method names are mixed with those of the system it calls.
+          sampleMember: 'loyaltyRate',
         },
       ],
     ],
@@ -1905,10 +1912,15 @@ test('names that stay in a stripped program are counted in a note that says whic
   );
   assert.match(
     swiftReport,
-    /- Contents\/MacOS\/Shop \(arm64: 5 type names, for example OrderClient · 4 names of properties and methods, for example submitOrderWithSubtotalCents:discountCents:\)/,
+    /- Contents\/MacOS\/Shop \(arm64: 5 type names, for example OrderClient · 6 names of properties and methods, for example loyaltyRate\)/,
   );
   // The setting is named where it has something to take out, and the same thing is not said twice.
   assert.match(swiftReport, /Reflection Metadata Level set to Without Names/);
+  // The same program in a folder and in an archive of it is not counted twice over.
+  assert.match(
+    runCli([join(root, 'twice'), '--lang', 'en']).stdout,
+    /2 program file\(s\) hold names that stay after stripping: up to 5 type names and 6 names of properties and methods in one file/,
+  );
   assert.doesNotMatch(objcReport, /Reflection Metadata Level/);
   assert.doesNotMatch(swiftReport, /A stripped program still carries/);
   assert.match(linuxReport, /A stripped program still carries the names it needs to run/);

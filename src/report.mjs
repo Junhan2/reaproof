@@ -15,6 +15,7 @@ const KO = {
   scanned: (count) => `읽어 본 파일 ${count}개`,
   ofSeen: (count) => `만난 파일 ${count}개 중`,
   programsAmong: (count) => `실행 파일 ${count}개 포함`,
+  archivesAmong: (count) => `연 꾸러미 ${count}개 포함`,
   leaksLabel: '찾은 누수',
   noLeaks: '없음',
   leakKinds: (count) => `${count}종류`,
@@ -99,11 +100,11 @@ const KO = {
     'native-symbols': {
       title: '실행 파일에 개발할 때 쓰는 이름표가 그대로 남아 있습니다',
       body: ({ files, names, sources, builders }) => [
-        `실행 파일 ${files}개에 함수와 변수 이름 ${names}개가 남아 있습니다. 코드가 무슨 일을 하는지 이름만으로 읽힙니다.`,
+        `실행 파일 ${files}개에 함수와 변수 이름이 남아 있습니다(가장 많은 파일에 ${names}개). 코드가 무슨 일을 하는지 이름만으로 읽힙니다.`,
         ...(builders > 0 ? ['원본 파일의 경로도 들어 있어, 빌드한 컴퓨터의 계정 이름과 폴더 구조가 그대로 보입니다.'] : []),
         ...(sources > 0 && builders === 0 ? ['원본 파일의 경로도 들어 있어, 코드의 폴더 구조가 그대로 보입니다.'] : []),
         '서명하기 전에 strip 으로 떼세요. 실행 파일은 옵션 없는 strip 이 이름을 모두 떼고, 다른 파일이 불러 쓰는 라이브러리는 strip -x 가 밖에서 쓰는 이름만 남깁니다. strip -S 는 경로와 디버그 표식만 뗍니다.',
-        'Xcode 로 빌드한다면 Strip Linked Product(STRIP_INSTALLED_PRODUCT)와 Strip Style(STRIP_STYLE) 설정이 이 일을 합니다.',
+        'Xcode 로 빌드한다면 Strip Linked Product(STRIP_INSTALLED_PRODUCT)와 Strip Style(STRIP_STYLE) 설정이 이 일을 합니다. 다만 Deployment Postprocessing(DEPLOYMENT_POSTPROCESSING)이 켜진 빌드에서만 뗍니다.',
         '떼기 전에 디버그 정보(.dSYM)를 배포물 밖에 보관해 두면 오류 기록은 계속 풀 수 있습니다.',
         '뗀 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다. 직접 세어 보려면 nm --no-dyldinfo -a <파일> 을 쓰세요. 옵션 없는 nm 은 이름을 뗀 프로그램에 <redacted function N> 을 지어 붙입니다.',
       ],
@@ -146,7 +147,7 @@ const KO = {
     'kept-names': {
       title: '이름을 떼어도 실행 파일에 남는 이름',
       body: ({ files, types, members, fieldNames }) => [
-        `실행 파일 ${files}개에 타입 이름 ${types}개와 속성·메서드 이름 ${members}개가 들어 있습니다. 프로그램이 실행 중에 쓰는 이름이라 strip 으로는 떼어지지 않고, rea 같은 도구는 이 이름으로 클래스와 그 안의 구조를 읽습니다.`,
+        `실행 파일 ${files}개에 이름을 떼어도 남는 이름이 들어 있습니다. 가장 많은 파일에는 타입 이름 ${types}개와 속성·메서드 이름 ${members}개가 있고, 이 가운데에는 앱이 불러 쓰는 시스템 기능의 이름도 섞여 있습니다. 프로그램이 실행 중에 쓰는 이름이라 strip 으로는 떼어지지 않고, rea 같은 도구는 이 이름으로 클래스와 그 안의 구조를 읽습니다.`,
         '이름을 가려도 로직은 그대로 남습니다. 숨겨야 할 로직은 서버로 옮기세요.',
         ...(fieldNames > 0
           ? [
@@ -219,9 +220,11 @@ const KO = {
   skippedLarge: (count) => `너무 커서 건너뛴 파일 ${count}개`,
   unreadableArchives: (count, names) => `읽지 못한 꾸러미 ${count}개(${names}): 손상됐거나 이 도구가 읽지 못하는 꼴입니다.`,
   unreadableFiles: (count, names) =>
-    `열지 못한 파일 ${count}개(${names}): 권한이 없거나, 암호가 걸렸거나, 이 도구가 풀지 못하는 방식으로 압축돼 있습니다.`,
+    `열지 못한 파일 ${count}개(${names}): 권한이 없거나, 암호가 걸렸거나, 이 도구가 풀지 못하는 방식으로 압축됐거나, 꾸러미에 적힌 것과 다릅니다.`,
   unopenedContainers: (count, names) =>
-    `열지 못한 꾸러미 ${count}개(${names}): 안을 읽지 못하는 종류이거나, 이 도구가 여는 깊이보다 더 깊이 겹친 꾸러미입니다. 안에 든 앱이나 폴더를 꺼내 직접 가리켜 주세요.`,
+    `열지 못한 꾸러미 ${count}개(${names}): 이 종류는 안을 읽지 못합니다. 안에 든 앱이나 폴더를 꺼내 직접 가리켜 주세요.`,
+  nestedTooDeep: (count, names) =>
+    `너무 깊이 겹쳐 열지 않은 꾸러미 ${count}개(${names}): 꾸러미 속 꾸러미는 세 겹까지 엽니다. 안의 꾸러미를 꺼내 직접 가리켜 주세요.`,
   diskImageHint: 'DMG 는 hdiutil attach -readonly -nobrowse <파일> 로 연 뒤, /Volumes 아래에 나타난 앱을 가리키면 됩니다.',
   textless: (count) => `그림, 소리, 영상, 글꼴, 압축 파일처럼 읽어도 찾을 것이 없는 ${count}개는 읽지 않았습니다.`,
   errors: {
@@ -318,6 +321,7 @@ const EN = {
   scanned: (count) => `Files read: ${count}`,
   ofSeen: (count) => `of ${count} met`,
   programsAmong: (count) => `${count} of them programs`,
+  archivesAmong: (count) => `${count} of them archives, opened`,
   leaksLabel: 'Leaks found',
   noLeaks: 'none',
   leakKinds: (count) => `${count} kind${count === 1 ? '' : 's'}`,
@@ -401,7 +405,7 @@ const EN = {
     'native-symbols': {
       title: 'Names meant for development are still in the program',
       body: ({ files, names, sources, builders }) => [
-        `${files} program file(s) keep ${names} names of functions and variables. What the code does reads from the names alone.`,
+        `${files} program file(s) keep the names of functions and variables, up to ${names} in one file. What the code does reads from the names alone.`,
         ...(builders > 0
           ? ['They also hold the paths of original files, which show the account name and folder layout of the machine that built them.']
           : []),
@@ -409,7 +413,7 @@ const EN = {
           ? ['They also hold the paths of original files, which show the folder layout of the code.']
           : []),
         'Strip them before signing. For a program, strip with no options removes every name; for a library that other files load, strip -x keeps only the names used from outside. strip -S removes just the paths and the debugging entries.',
-        'In an Xcode build the settings Strip Linked Product (STRIP_INSTALLED_PRODUCT) and Strip Style (STRIP_STYLE) do this.',
+        'In an Xcode build the settings Strip Linked Product (STRIP_INSTALLED_PRODUCT) and Strip Style (STRIP_STYLE) do this, in a build that has Deployment Postprocessing (DEPLOYMENT_POSTPROCESSING) on.',
         'Keep the debug information (.dSYM) outside what ships first, and crash reports can still be read.',
         'Run reaproof again afterwards: when this finding is gone, it worked. To count the names yourself, use nm --no-dyldinfo -a <file>; plain nm adds entries of its own, <redacted function N>, to a stripped program.',
       ],
@@ -452,7 +456,7 @@ const EN = {
     'kept-names': {
       title: 'Names that stay in a program after stripping',
       body: ({ files, types, members, fieldNames }) => [
-        `${files} program file(s) hold ${types} type names and ${members} names of properties and methods. The program uses them while it runs, so strip does not take them out, and a tool like rea reads the classes and what is inside them from these names.`,
+        `${files} program file(s) hold names that stay after stripping: up to ${types} type names and ${members} names of properties and methods in one file, among them the names of system frameworks the program uses. The program uses them while it runs, so strip does not take them out, and a tool like rea reads the classes and what is inside them from these names.`,
         'Hiding names leaves the logic where it is. Move logic that must stay private to a server.',
         ...(fieldNames > 0
           ? [
@@ -526,9 +530,11 @@ const EN = {
   unreadableArchives: (count, names) =>
     `Archives that could not be read: ${count} (${names}). Damaged, or laid out in a way this scanner does not read.`,
   unreadableFiles: (count, names) =>
-    `Files that could not be opened: ${count} (${names}). No permission, a password, or a kind of compression this scanner does not undo.`,
+    `Files that could not be opened: ${count} (${names}). No permission, a password, a kind of compression this scanner does not undo, or not what its archive says it is.`,
   unopenedContainers: (count, names) =>
-    `Containers that could not be opened: ${count} (${names}). Either a kind this scanner does not read inside, or an archive nested deeper than it goes. Take out the app or folder inside and point at that.`,
+    `Containers that could not be opened: ${count} (${names}). This scanner does not read inside this kind. Take out the app or folder inside and point at that.`,
+  nestedTooDeep: (count, names) =>
+    `Archives nested too deep to open: ${count} (${names}). Archives inside archives are opened three deep. Take out the one inside and point at it.`,
   diskImageHint: 'For a DMG, open it with hdiutil attach -readonly -nobrowse <file> and point at the app that appears under /Volumes.',
   textless: (count) =>
     `Not read: ${count} file(s) such as pictures, sound, video, fonts and compressed files, in which there is nothing to find.`,
@@ -683,13 +689,15 @@ export function createReporter(language) {
     // An address list is about the addresses, not about which file each one sits in.
     const addresses = [...new Set(findings.flatMap(({ detail }) => detail.addresses ?? []))];
     const sumOf = (field) => findings.reduce((sum, { detail }) => sum + (detail[field] ?? 0), 0);
+    // A program met in a folder and again in an archive of it would count twice in a sum.
+    const mostOf = (field) => findings.reduce((most, { detail }) => Math.max(most, detail[field] ?? 0), 0);
     const totals = {
       files: findings.length,
       embedded: sumOf('embeddedCount'),
       sources: sumOf('sourceCount'),
-      names: sumOf('names'),
-      types: sumOf('types'),
-      members: sumOf('members'),
+      names: mostOf('names'),
+      types: mostOf('types'),
+      members: mostOf('members'),
       fieldNames: sumOf('swiftFieldNames'),
       builders: findings.filter(({ detail }) => detail.namesBuilder).length,
       debugSymbols: findings.filter(({ detail }) => detail.kind === 'debug-symbols').length,
@@ -706,6 +714,7 @@ export function createReporter(language) {
       unread.push(t.unopenedContainers(result.unopenedContainers.length, named(result.unopenedContainers)));
       if (result.unopenedContainers.some((name) => /\.dmg$/i.test(name))) unread.push(t.diskImageHint);
     }
+    if (result.nestedTooDeep.length > 0) unread.push(t.nestedTooDeep(result.nestedTooDeep.length, named(result.nestedTooDeep)));
     if (result.unreadableArchives.length > 0) {
       unread.push(t.unreadableArchives(result.unreadableArchives.length, named(result.unreadableArchives)));
     }
@@ -788,6 +797,7 @@ export function createReporter(language) {
         : result.targets.map((target) => toDisplayPath(result.root, target)).join(', ');
       const asides = [];
       if (result.filesSeen > result.filesScanned) asides.push(t.ofSeen(result.filesSeen));
+      if (result.archivesOpened > 0) asides.push(t.archivesAmong(result.archivesOpened));
       if (result.programsScanned > 0) asides.push(t.programsAmong(result.programsScanned));
       const scanned = t.scanned(result.filesScanned);
       const lines = [

@@ -46,6 +46,10 @@ const NAME = /^[A-Za-z_$.][\w$.:]*$/;
 // Swift classes are named in the Objective-C list too, in mangled form: `_Tt`, letters for
 // the kind, then each part of the name led by its length, as in `_TtC4Shop11OrderClient`.
 const SWIFT_MANGLED_CLASS = /^_Tt[A-Z]+((?:\d+[^\d].*)?)$/;
+// A stored property or enum case as Swift code spells one. The same list holds the names of
+// associated types such as `RawValue`, which come from the standard library, and names that
+// macros make, which start with `_` or `$`: neither is a good example of the program's own.
+const SWIFT_MEMBER_NAME = /^[a-z][A-Za-z0-9]*$/;
 const LC_BUILD_VERSION = 0x32;
 // Builds from before LC_BUILD_VERSION say what they are for by which "minimum version"
 // command they carry: macOS, iOS, tvOS or watchOS.
@@ -325,10 +329,22 @@ function readKeptNames(read, sections) {
     objcClassNames: classNames.length,
     swiftFieldNames: fieldNames.length,
     objcMethodNames: methodNames.length,
-    sampleType: classNames.length > 0 ? copied(plainClassName(classNames[0])) : null,
-    // The longest of the first few says the most: a method name spells out what it takes.
-    sampleMember: copied(memberNames.slice(0, 64).reduce((longest, name) => (name.length > longest.length ? name : longest), '') || null),
+    // A Swift class is named after the program's own module. Any other name in the list may
+    // be that of a protocol the program adopts from a system framework.
+    sampleType: classNames.length > 0 ? copied(plainClassName(classNames.find(isSwiftClass) ?? classNames[0])) : null,
+    // Of the program's own names, the longest of the first few says the most. Method names
+    // are not taken: the list holds those of the system methods the program calls as well.
+    sampleMember: copied(
+      fieldNames
+        .filter((name) => SWIFT_MEMBER_NAME.test(name))
+        .slice(0, 64)
+        .reduce((longest, name) => (name.length > longest.length ? name : longest), '') || null,
+    ),
   };
+}
+
+function isSwiftClass(name) {
+  return SWIFT_MANGLED_CLASS.test(name);
 }
 
 /**

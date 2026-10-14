@@ -129,6 +129,7 @@ export function startResult(subject) {
     unreadableFiles: [],
     unreadableArchives: [],
     unopenedContainers: [],
+    nestedTooDeep: [],
   };
 }
 
@@ -136,6 +137,7 @@ export function startResult(subject) {
 export function countLeftUnread(result) {
   return (
     result.unopenedContainers.length +
+    result.nestedTooDeep.length +
     result.unreadableArchives.length +
     result.unreadableFiles.length +
     result.skippedLargeFiles.length
@@ -280,7 +282,7 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
     if (openArchive) {
       const depth = (within?.depth ?? 0) + 1;
       const budget = within?.budget ?? { left: MAX_UNPACKED_BYTES };
-      if (depth > MAX_ARCHIVE_DEPTH) result.unopenedContainers.push(displayPath);
+      if (depth > MAX_ARCHIVE_DEPTH) result.nestedTooDeep.push(displayPath);
       else scanArchive(openArchive, source, displayPath, { depth, budget, isAsar: openArchive === openAsar }, state);
     } else if (isSealedContainer(name)) {
       result.unopenedContainers.push(displayPath);
