@@ -48,8 +48,10 @@ const isGranted = (entitlements, key) =>
 export function checkMachO(path, images) {
   // The system grants entitlements and the Hardened Runtime to a process, by its own executable.
   const executables = images.filter(({ kind }) => kind === 'executable');
+  const programs = images.filter(({ kind }) => kind !== 'other');
   return [
-    ...checkNames(path, images.filter(({ kind }) => kind !== 'other')),
+    ...checkNames(path, programs),
+    ...checkKeptNames(path, programs),
     ...checkEntitlements(path, executables),
     ...checkRuntime(path, executables),
   ];
@@ -82,6 +84,18 @@ function checkNames(path, images) {
     namesBuilder: sources.some((source) => HOME_FOLDER.test(source)),
   };
   return [{ rule: 'native-symbols', severity: 'medium', path, detail }];
+}
+
+/**
+ * Names that stripping does not take out, because the program uses them while it runs. They
+ * cannot all be closed, so this is a note: it says what a stripped program still tells.
+ */
+function checkKeptNames(path, images) {
+  const count = ({ keptNames }) => keptNames.types + keptNames.members;
+  // As with the names above, the build with the most speaks for the file.
+  const [most] = [...images].sort((one, other) => count(other) - count(one));
+  if (!most || count(most) === 0) return [];
+  return [{ rule: 'kept-names', severity: 'info', path, detail: { architecture: most.architecture, ...most.keptNames } }];
 }
 
 function checkEntitlements(path, executables) {

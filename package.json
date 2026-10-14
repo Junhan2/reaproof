@@ -1,6 +1,6 @@
 {
   "name": "reaproof",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "One command that shows what AI reverse-engineering agents can read from your shipped app, and closes what can be closed.",
   "keywords": [
     "security",

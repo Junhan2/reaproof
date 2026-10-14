@@ -6,11 +6,12 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { deflateRawSync } from 'node:zlib';
 import { main } from '../src/cli.mjs';
 import { applyFix, planFix, undoLastFix } from '../src/fix.mjs';
 import { toWindowsShellArgument } from '../src/measure.mjs';
 import { scanDeployedSite } from '../src/remote.mjs';
-import { CHUNK_BYTES, OVERLAP_BYTES, scan, ScanError, withoutFiles } from '../src/scan.mjs';
+import { CHUNK_BYTES, MAX_UNPACKED_BYTES, OVERLAP_BYTES, scan, ScanError, withoutFiles } from '../src/scan.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../bin/reaproof.mjs', import.meta.url));
 const MAP_WITH_SOURCES = JSON.stringify({
@@ -166,7 +167,8 @@ function words(values, write = 'writeUInt32LE') {
  * Writes one Mach-O image in the layout of Apple's <mach-o/loader.h>: the header, then a
  * command for the symbol table, one saying what system the build is for when `platform` is
  * given (or `minimumVersionCommand`, the way older builds say it) and one for the signature
- * when signed, then the tables they point at.
+ * when signed, then the tables they point at. `sections` are bytes of a `__TEXT` segment by
+ * section name, listed by a segment command and laid down after everything else.
  *
  * @param {{ flags: number, entitlements?: string[], refused?: string[] } | null} [options.signature]
  *   null for a build that is not signed
@@ -178,6 +180,7 @@ function buildMachO({
   minimumVersionCommand = null,
   symbols = [],
   signature = null,
+  sections = {},
 } = {}) {
   const table = Buffer.alloc(symbols.length * 16);
   const nameTable = [Buffer.from('\0')];
@@ -189,16 +192,44 @@ function buildMachO({
     nameBytes += Buffer.byteLength(name) + 1;
   });
   const signatureBlob = signature ? buildSignature(signature) : Buffer.alloc(0);
-  const commandBytes = 24 + (platform ? 24 : 0) + (minimumVersionCommand ? 16 : 0) + (signature ? 16 : 0);
+  const sectionList = Object.entries(sections);
+  const segmentBytes = sectionList.length > 0 ? 72 + sectionList.length * 80 : 0;
+  const commandBytes = 24 + (platform ? 24 : 0) + (minimumVersionCommand ? 16 : 0) + (signature ? 16 : 0) + segmentBytes;
   const tableOffset = 32 + commandBytes;
   const namesOffset = tableOffset + table.length;
+  const sectionsOffset = namesOffset + nameBytes + signatureBlob.length;
 
-  const commands = [[0x2, 24, tableOffset, symbols.length, namesOffset, nameBytes]];
-  if (platform) commands.push([0x32, 24, platform, 0, 0, 0]);
-  if (minimumVersionCommand) commands.push([minimumVersionCommand, 16, 0, 0]);
-  if (signature) commands.push([0x1d, 16, namesOffset + nameBytes, signatureBlob.length]);
-  const header = [0xfeedfacf, cpuType, 0, fileType, commands.length, commandBytes, 0, 0];
-  return Buffer.concat([words([...header, ...commands.flat()]), table, ...nameTable, signatureBlob]);
+  const commands = [words([0x2, 24, tableOffset, symbols.length, namesOffset, nameBytes])];
+  if (platform) commands.push(words([0x32, 24, platform, 0, 0, 0]));
+  if (minimumVersionCommand) commands.push(words([minimumVersionCommand, 16, 0, 0]));
+  if (signature) commands.push(words([0x1d, 16, namesOffset + nameBytes, signatureBlob.length]));
+  if (sectionList.length > 0) commands.push(textSegmentCommand(sectionList, sectionsOffset));
+  const header = words([0xfeedfacf, cpuType, 0, fileType, commands.length, commandBytes, 0, 0]);
+  return Buffer.concat([header, ...commands, table, ...nameTable, signatureBlob, ...sectionList.map(([, bytes]) => bytes)]);
+}
+
+/** A 64-bit segment command for `__TEXT` that lists the sections, whose bytes follow one another from `dataOffset`. */
+function textSegmentCommand(sectionList, dataOffset) {
+  const command = Buffer.alloc(72 + sectionList.length * 80);
+  command.writeUInt32LE(0x19, 0);
+  command.writeUInt32LE(command.length, 4);
+  command.write('__TEXT', 8, 'latin1');
+  command.writeUInt32LE(sectionList.length, 64);
+  let offset = dataOffset;
+  sectionList.forEach(([name, bytes], index) => {
+    const at = 72 + index * 80;
+    command.write(name, at, 'latin1');
+    command.write('__TEXT', at + 16, 'latin1');
+    command.writeBigUInt64LE(BigInt(bytes.length), at + 40);
+    command.writeUInt32LE(offset, at + 48);
+    offset += bytes.length;
+  });
+  return command;
+}
+
+/** Names the way a program stores them: one after another, each closed by a zero byte. */
+function cStrings(...strings) {
+  return Buffer.from(strings.map((string) => `${string}\0`).join(''), 'latin1');
 }
 
 /**
@@ -215,6 +246,85 @@ function buildSignature({ flags, entitlements = [], refused = [] }) {
   const totalBytes = indexBytes + codeDirectory.length + entitlementsBlob.length;
   const index = words([0xfade0cc0, totalBytes, 2, 0, indexBytes, 5, indexBytes + codeDirectory.length], 'writeUInt32BE');
   return Buffer.concat([index, codeDirectory, entitlementsBlob]);
+}
+
+/**
+ * Writes a ZIP archive in the layout of PKWARE's APPNOTE.TXT: each file behind a local
+ * header, then the central directory, then the end record. A file given as an object can be
+ * stored unpacked, be marked encrypted, be a symbolic link, name another way of packing
+ * than the one its bytes are packed in, or state a size it does not have (for a stored file
+ * the size of both its forms, unless `statedPackedBytes` gives the packed one). With
+ * `isZip64` every size, offset and count is written the way an archive too large for the
+ * four-byte fields writes them. Files given as a list of pairs may use one name twice.
+ */
+function buildZip(files, { isZip64 = false } = {}) {
+  const parts = [];
+  const directory = [];
+  let offset = 0;
+  for (const [path, file] of Array.isArray(files) ? files : Object.entries(files)) {
+    const content = Buffer.from(file.content ?? file);
+    const method = file.method ?? (file.isStored ? 0 : 8);
+    const packed = method === 0 ? content : deflateRawSync(content);
+    const name = Buffer.from(path);
+    const size = file.statedBytes ?? content.length;
+    const packedBytes = file.statedPackedBytes ?? (method === 0 ? size : packed.length);
+    const flags = file.isEncrypted ? 1 : 0;
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(flags, 6);
+    local.writeUInt16LE(method, 8);
+    local.writeUInt32LE(packedBytes, 18);
+    local.writeUInt32LE(size, 22);
+    local.writeUInt16LE(name.length, 26);
+    const entry = Buffer.alloc(46);
+    entry.writeUInt32LE(0x02014b50, 0);
+    // The upper byte names the system the attributes are for (3 is UNIX), whose file mode says what is a link.
+    entry.writeUInt16LE(file.isLink ? (3 << 8) | 20 : 20, 4);
+    entry.writeUInt16LE(flags, 8);
+    entry.writeUInt16LE(method, 10);
+    entry.writeUInt32LE(isZip64 ? 0xffffffff : packedBytes, 20);
+    entry.writeUInt32LE(isZip64 ? 0xffffffff : size, 24);
+    entry.writeUInt16LE(name.length, 28);
+    entry.writeUInt32LE(file.isLink ? (0o120777 << 16) >>> 0 : 0, 38);
+    entry.writeUInt32LE(isZip64 ? 0xffffffff : offset, 42);
+    // The extra field that carries, eight bytes each, what did not fit above.
+    const extra = Buffer.alloc(isZip64 ? 28 : 0);
+    if (isZip64) {
+      extra.writeUInt16LE(0x0001, 0);
+      extra.writeUInt16LE(24, 2);
+      extra.writeBigUInt64LE(BigInt(size), 4);
+      extra.writeBigUInt64LE(BigInt(packedBytes), 12);
+      extra.writeBigUInt64LE(BigInt(offset), 20);
+      entry.writeUInt16LE(extra.length, 30);
+    }
+
+    parts.push(local, name, packed);
+    directory.push(Buffer.concat([entry, name, extra]));
+    offset += local.length + name.length + packed.length;
+  }
+  const directoryBytes = directory.reduce((sum, part) => sum + part.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(isZip64 ? 0xffff : directory.length, 8);
+  end.writeUInt16LE(isZip64 ? 0xffff : directory.length, 10);
+  end.writeUInt32LE(isZip64 ? 0xffffffff : directoryBytes, 12);
+  end.writeUInt32LE(isZip64 ? 0xffffffff : offset, 16);
+  if (!isZip64) return Buffer.concat([...parts, ...directory, end]);
+
+  // The record with the eight-byte fields, and the locator that says where it is.
+  const record = Buffer.alloc(56);
+  record.writeUInt32LE(0x06064b50, 0);
+  record.writeBigUInt64LE(44n, 4);
+  record.writeBigUInt64LE(BigInt(directory.length), 24);
+  record.writeBigUInt64LE(BigInt(directory.length), 32);
+  record.writeBigUInt64LE(BigInt(directoryBytes), 40);
+  record.writeBigUInt64LE(BigInt(offset), 48);
+  const locator = Buffer.alloc(20);
+  locator.writeUInt32LE(0x07064b50, 0);
+  locator.writeBigUInt64LE(BigInt(offset + directoryBytes), 8);
+  locator.writeUInt32LE(1, 16);
+  return Buffer.concat([...parts, ...directory, record, locator, end]);
 }
 
 /** Wraps builds for several processors into one file, as in <mach-o/fat.h>. */
@@ -782,6 +892,8 @@ test('source files, tests and readable code packed into an app are reported', (t
     'dist/app.asar': buildAsar({
       'main.js': readableCode,
       'src/main.ts': 'export const answer: number = 42;\n',
+      // In an app's own archive a `.ts` file is TypeScript wherever it lies.
+      'preload.ts': 'export {};\n',
       'main.test.js': 'test("answer", () => {});\n',
       'node_modules/dependency/index.test.js': 'test("ignored", () => {});\n',
     }),
@@ -794,6 +906,7 @@ test('source files, tests and readable code packed into an app are reported', (t
   assert.deepEqual(findings.sort(), [
     ['unminified-code', 'dist/app.asar:/main.js', undefined],
     ['unshipped-source', 'dist/app.asar:/main.test.js', 'test'],
+    ['unshipped-source', 'dist/app.asar:/preload.ts', 'source'],
     ['unshipped-source', 'dist/app.asar:/src/main.ts', 'source'],
   ]);
 });
@@ -1201,6 +1314,12 @@ test('every file that can hold text is read, on disk and inside an archive alike
     'out/AuthKey_7QW8ER5TY2.p8': `${['-----BEGIN', 'PRIVATE KEY-----'].join(' ')}\n${'M'.repeat(64)}\n`,
     // In text a key stands apart from what is around it: letters that only hold the shape of one are not a key.
     'out/table.txt': `row${['AKIA', 'Q7ZK9AB3XY5TW2MN'].join('')}end\n`,
+    // Code saved two bytes to a character says so in its first two bytes, low byte first or high.
+    'out/wide.js': Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`const key="${keyEndingIn('0008')}";`, 'utf16le')]),
+    'out/wide-be.js': Buffer.concat([
+      Buffer.from([0xfe, 0xff]),
+      Buffer.from(`const key="${keyEndingIn('0009')}";`, 'utf16le').swap16(),
+    ]),
     // One zero byte anywhere and a file is not text, however much of it reads like text
     // before that: a key stored between its neighbours is then found.
     'out/packed.dat': Buffer.concat([
@@ -1219,11 +1338,11 @@ test('every file that can hold text is read, on disk and inside an archive alike
 
   assert.deepEqual(
     result.findings.filter(({ rule }) => rule === 'secret').map(({ path }) => path).sort(),
-    ['AuthKey_7QW8ER5TY2.p8', 'app.asar:/config.yaml', 'config.yaml', 'deploy.sh', 'logic.wasm', 'packed.dat'],
+    ['AuthKey_7QW8ER5TY2.p8', 'app.asar:/config.yaml', 'config.yaml', 'deploy.sh', 'logic.wasm', 'packed.dat', 'wide-be.js', 'wide.js'],
   );
   // The archive counts as one file read, and each file inside it is counted like one on disk.
-  assert.deepEqual([result.filesSeen, result.filesScanned], [11, 9]);
-  assert.match(stdout, /Files read: 9 \(of 11 met\)\n  Not read: 2 file\(s\) such as pictures/);
+  assert.deepEqual([result.filesSeen, result.filesScanned], [13, 11]);
+  assert.match(stdout, /Files read: 11 \(of 13 met\)\n  Not read: 2 file\(s\) such as pictures/);
 });
 
 test('a container that is not opened is named first, and without the code that ships there is no rating', (t) => {
@@ -1237,12 +1356,16 @@ test('a container that is not opened is named first, and without the code that s
     'mixed/backup.zip': 'stands in for an archive',
     // One file compressed by itself is not a container: there is nothing in it but that file.
     'mixed/app.js.gz': 'stands in for a compressed copy',
+    // An archive compressed as a whole is one, though its name ends the same way.
+    'packed/Shop-1.0.tar.gz': 'stands in for a packed app',
+    'packed/index.html': '<p>hi</p>',
   });
 
   const forPeople = runCli([join(root, 'dist'), '--lang', 'en']);
   const forAgents = runCli([join(root, 'dist'), '--json', '--lang', 'en']);
   const withNotes = runCli([join(root, 'upload'), '--lang', 'en']);
   const mixed = runCli([join(root, 'mixed'), '--lang', 'en']);
+  const packed = runCli([join(root, 'packed'), '--lang', 'en']);
 
   assert.equal(forPeople.status, 3);
   assert.match(forPeople.stdout, /Files read: 0 \(of 2 met\)\n  Containers that could not be opened: 1 \(Shop-1\.0\.dmg\)/);
@@ -1257,6 +1380,8 @@ test('a container that is not opened is named first, and without the code that s
   assert.match(result.explain.unread[0], /could not be opened: 1 \(Shop-1\.0\.dmg\)/);
   assert.equal(withNotes.status, 3);
   assert.match(withNotes.stdout, /Files read: 1 \(of 2 met\)\n[^]*rea risk: not rated/);
+  assert.equal(packed.status, 3);
+  assert.match(packed.stdout, /Files read: 1 \(of 2 met\)\n  Containers that could not be opened: 1 \(Shop-1\.0\.tar\.gz\)/);
   // With code read beside it there is a rating, and the unread container is still said first.
   assert.equal(mixed.status, 0);
   assert.match(
@@ -1405,8 +1530,14 @@ test('a file made to look like far more than it is costs little and breaks nothi
     'overlapping': Buffer.concat([table, image]),
     // More key-shaped text than a real file holds, one byte to a character and then two.
     'flood.bin': Buffer.concat([Buffer.from(keyShaped(300, 1000)), Buffer.from(keyShaped(300, 5000), 'utf16le')]),
-    // A file inside an archive is held whole in memory, so one that says it is large is not read.
-    'claims.asar': buildAsar({ 'huge.bin': { content: '', claimedBytes: 31 * 1024 * 1024 } }),
+    // A file inside an archive is held whole in memory. One that says it is larger than
+    // that allows is not read, and one that says it is larger than the archive is refused.
+    'claims.asar': buildAsar({
+      'vast.bin': { content: '', claimedBytes: 600 * 1024 * 1024 },
+      'huge.bin': { content: '', claimedBytes: 31 * 1024 * 1024 },
+    }),
+    // A size that is no number at all: nothing such an archive says is gone by.
+    'odd.asar': buildAsar({ 'main.js': { content: BUNDLE, claimedBytes: 'many' } }),
   });
 
   const result = scan(root);
@@ -1417,7 +1548,10 @@ test('a file made to look like far more than it is costs little and breaks nothi
     ['asar-readable claims.asar', 'secret flood.bin'],
   );
   assert.equal(result.findings.filter(({ rule }) => rule === 'secret').length, 200);
-  assert.deepEqual([result.skippedLargeFiles, result.unreadableArchives], [['claims.asar:/huge.bin'], []]);
+  assert.deepEqual(
+    [result.skippedLargeFiles, result.unreadableFiles, result.unreadableArchives],
+    [['claims.asar:/vast.bin'], ['claims.asar:/huge.bin'], ['odd.asar']],
+  );
 });
 
 test('notes and scripts in what ships are listed as a note, and measure is offered only where JavaScript was read', (t) => {
@@ -1471,4 +1605,345 @@ test('a Windows path is passed to the shell in quotes, or refused when it could 
   for (const path of ['C:\\a & calc', 'C:\\%TEMP%\\x', 'C:\\a"b', 'C:\\a|b', 'C:\\a^b']) {
     assert.throws(() => toWindowsShellArgument(path), /not safe to pass on/);
   }
+});
+
+test('a ZIP archive is opened whatever it is called, and what is in it is read like files on disk', (t) => {
+  const liveKey = ['sk', 'live', 'Zk9aB3xY7Qw8eR5tY2Mn4bV6'].join('_');
+  const root = makeProject(t, {
+    // An iOS app is shipped as a ZIP of this shape.
+    'Shop.ipa': buildZip({
+      'Payload/Shop.app/Shop': buildMachO({ symbols: names(LOCAL_NAME, 150), signature: { flags: HARDENED_RUNTIME } }),
+      'Payload/Shop.app/web/app.js': BUNDLE,
+      'Payload/Shop.app/web/app.js.map': MAP_WITH_SOURCES,
+      // An archive inside the archive, stored as it is.
+      'Payload/Shop.app/app.asar': { content: buildAsar({ 'main.js': BUNDLE, 'settings.yaml': `stripe: ${liveKey}\n` }), isStored: true },
+      'Payload/Shop.app/Shop.dSYM/Contents/Info.plist': '<plist/>\n',
+      'Payload/Shop.app/node_modules/dep/index.js': `const key="${liveKey}";`,
+      'Payload/Shop.app/alias': { content: 'Shop', isLink: true },
+      'Payload/Shop.app/photo.png': 'PNG',
+      // A piece of video, as on disk: a ZIP is a folder on its way somewhere.
+      'Payload/Shop.app/video/seg0.ts': 'G stands in for a video segment',
+    }),
+    // Nothing in this name says what it is: it is told by how it opens.
+    upload: buildZip({ 'notes.txt': 'hello\n' }),
+  });
+  const nested = (levels) => (levels === 0 ? 'hello\n' : buildZip({ [`level${levels}`]: nested(levels - 1) }));
+  const shapes = makeProject(t, {
+    // Written the way an archive past four gigabytes is.
+    'large.zip': buildZip({ 'config.yaml': `stripe: ${liveKey}\n` }, { isZip64: true }),
+    // A writer on Windows may part folders with a backslash, and one name may be used twice.
+    'odd.zip': buildZip([
+      ['win\\dir\\config.yaml', `stripe: ${liveKey}\n`],
+      ['twice.txt', `stripe: ${liveKey}\n`],
+      ['twice.txt', `stripe: ${liveKey}\n`],
+    ]),
+    // Archives in archives: three deep are opened, and the fourth is left shut and named.
+    'deep.zip': nested(4),
+    // A file under more folders than calls can nest is read like any other.
+    'sunk.zip': buildZip({ [`${'a/'.repeat(12_000)}config.yaml`]: `stripe: ${liveKey}\n` }),
+  });
+
+  const result = scan(root);
+  const { stdout } = runCli([root, '--lang', 'en']);
+  const odd = scan(shapes);
+
+  assert.deepEqual(
+    result.findings.map(({ rule, severity, path }) => [rule, severity, path]).sort(),
+    [
+      ['asar-readable', 'info', 'Shop.ipa:/Payload/Shop.app/app.asar'],
+      ['native-symbols', 'medium', 'Shop.ipa:/Payload/Shop.app/Shop'],
+      ['secret', 'critical', 'Shop.ipa:/Payload/Shop.app/app.asar:/settings.yaml'],
+      ['sourcemap-sources', 'critical', 'Shop.ipa:/Payload/Shop.app/web/app.js.map'],
+      ['stray-file', 'high', 'Shop.ipa:/Payload/Shop.app/Shop.dSYM'],
+    ],
+  );
+  // Each archive is one file read, and so is each file in it but the picture. The link has
+  // no bytes of its own, and the folders that are never entered on disk are not entered here.
+  assert.deepEqual(
+    [result.filesSeen, result.filesScanned, result.archivesOpened, result.programsScanned, result.scriptsScanned],
+    [11, 10, 3, 1, 2],
+  );
+  // A map inside an archive cannot be taken out without repacking it.
+  assert.deepEqual(planFix(result), []);
+  assert.match(stdout, /Files inside an archive cannot be fixed automatically/);
+  assert.deepEqual(
+    odd.findings.map(({ rule, path }) => [rule, path]).sort(),
+    [
+      ['secret', 'large.zip:/config.yaml'],
+      ['secret', 'odd.zip:/twice.txt'],
+      ['secret', 'odd.zip:/twice.txt'],
+      ['secret', 'odd.zip:/win/dir/config.yaml'],
+      // A long path is cut where it is shown.
+      ['secret', `${`sunk.zip:/${'a/'.repeat(12_000)}`.slice(0, 300)}…`],
+    ],
+  );
+  assert.deepEqual(odd.unopenedContainers, ['deep.zip:/level4:/level3:/level2']);
+});
+
+test('what an archive holds but will not give up is named, and without it there is no rating', (t) => {
+  const root = makeProject(t, {
+    'locked/app.zip': buildZip({ 'main.js': { content: BUNDLE, isEncrypted: true } }),
+    // Said to be packed with LZMA, which is not undone here, whatever the bytes are.
+    'packed/app.zip': buildZip({ 'main.js': { content: BUNDLE, method: 14 } }),
+    'lying/app.zip': buildZip({
+      'less.js': { content: BUNDLE, statedBytes: 5 },
+      'more.js': { content: BUNDLE, statedBytes: 5000 },
+      // Stored, and so as large packed as unpacked: these two say otherwise.
+      'padded.js': { content: BUNDLE, isStored: true, statedBytes: 5, statedPackedBytes: BUNDLE.length },
+      'short.js': { content: BUNDLE, isStored: true, statedBytes: 5000, statedPackedBytes: BUNDLE.length },
+    }),
+    // More folders than any real archive holds, named by nine entries.
+    'crowded/app.zip': buildZip(
+      Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`${index}/${'a/'.repeat(30_000)}main.js`, BUNDLE])),
+    ),
+    'cut/app.zip': buildZip({ 'main.js': BUNDLE }).subarray(0, -30),
+    'cut/notes.txt': 'hello\n',
+    'empty/app.zip': buildZip({}),
+    'mixed/app.zip': buildZip({ 'main.js': BUNDLE, 'extra.bin': { content: 'x', isEncrypted: true } }),
+    'noted/app.zip': buildZip({ 'notes.txt': 'hello\n', 'main.js': { content: BUNDLE, isEncrypted: true } }),
+    'denied/settings.bin': 'not for this user',
+  });
+  chmodSync(join(root, 'denied/settings.bin'), 0o000);
+  // Windows keeps no such permission, and nothing is closed to the superuser.
+  const canBeDenied = process.platform !== 'win32' && process.getuid() !== 0;
+  const unread = (folder) => {
+    const { risk, unreadableFiles, unreadableArchives } = scan(join(root, folder));
+    return [risk, unreadableFiles, unreadableArchives];
+  };
+
+  const locked = runCli([join(root, 'locked'), '--lang', 'en']);
+  const cut = runCli([join(root, 'cut'), '--lang', 'en']);
+  const empty = scan(join(root, 'empty'));
+
+  assert.deepEqual(unread('locked'), ['unrated', ['app.zip:/main.js'], []]);
+  assert.deepEqual(unread('packed'), ['unrated', ['app.zip:/main.js'], []]);
+  assert.deepEqual(
+    unread('lying'),
+    ['unrated', ['app.zip:/less.js', 'app.zip:/padded.js', 'app.zip:/more.js', 'app.zip:/short.js'], []],
+  );
+  assert.deepEqual(unread('crowded'), ['unrated', [], ['app.zip']]);
+  // A note read beside what stayed shut does not make a rating.
+  assert.deepEqual(unread('cut'), ['unrated', [], ['app.zip']]);
+  assert.deepEqual(unread('noted'), ['unrated', ['app.zip:/main.js'], []]);
+  // An archive with nothing in it was opened, and nothing was read.
+  assert.deepEqual([empty.risk, empty.archivesOpened, empty.filesScanned], ['unrated', 1, 1]);
+  // With code read beside it there is a rating, and what stayed shut is still named.
+  assert.deepEqual(unread('mixed'), ['baseline', ['app.zip:/extra.bin'], []]);
+  if (canBeDenied) assert.deepEqual(unread('denied'), ['unrated', ['settings.bin'], []]);
+  assert.equal(locked.status, 3);
+  assert.match(locked.stdout, /Files read: 1 \(of 2 met\)\n  Files that could not be opened: 1 \(app\.zip:\/main\.js\)\. No permission, a password/);
+  // It is not counted a second time among the files passed over for their kind.
+  assert.doesNotMatch(locked.stdout, /Not read: /);
+  assert.match(cut.stdout, /Files read: 1 \(of 2 met\)\n  Archives that could not be read: 1 \(app\.zip\)/);
+});
+
+test('an archive that states far more than it weighs is read up to a limit, smallest files first', (t) => {
+  // Four of these come to the limit exactly.
+  const statedBytes = MAX_UNPACKED_BYTES / 4;
+  const claims = Object.fromEntries(
+    Array.from({ length: 10 }, (_, index) => [`blob${index}.bin`, { content: '', isStored: true, statedBytes }]),
+  );
+  // Too large to hold in memory at all, whatever is left of the limit.
+  const vast = { content: '', isStored: true, statedBytes: 600 * 1024 * 1024 };
+  const root = makeProject(t, {
+    'claims/bomb.zip': buildZip({ ...claims, 'vast.bin': vast }),
+    // The program is the last thing in the archive and is read first, being the smallest.
+    'app/bomb.zip': buildZip({ ...claims, 'vast.bin': vast, 'main.js': BUNDLE }),
+    'notes/app.zip': buildZip({ 'vast.bin': vast, 'notes.txt': 'hello\n' }),
+    // Two archives in one: what the first unpacks is no longer there for the second.
+    'nested/outer.zip': buildZip({ 'one.zip': buildZip(claims), 'two.zip': buildZip(claims) }),
+  });
+
+  const claimsOnly = scan(join(root, 'claims'));
+  const withProgram = scan(join(root, 'app'));
+  const withNotes = scan(join(root, 'notes'));
+  const nested = scan(join(root, 'nested'));
+
+  // The four within the limit turn out not to be there; the other six and the vast one are not unpacked at all.
+  assert.deepEqual([claimsOnly.unreadableFiles.length, claimsOnly.skippedLargeFiles.length, claimsOnly.risk], [4, 7, 'unrated']);
+  // The program is read first and counts against the limit, so one fewer of the claims fits after it.
+  assert.deepEqual(
+    [withProgram.scriptsScanned, withProgram.unreadableFiles.length, withProgram.skippedLargeFiles.length, withProgram.risk],
+    [1, 3, 8, 'baseline'],
+  );
+  // With a note read and the one large file not, nothing is said about what ships.
+  assert.deepEqual([withNotes.skippedLargeFiles, withNotes.unreadableFiles, withNotes.risk], [['app.zip:/vast.bin'], [], 'unrated']);
+  assert.deepEqual([nested.archivesOpened, nested.unreadableFiles.length, nested.skippedLargeFiles.length], [3, 3, 17]);
+});
+
+const canZip = spawnSync('zip', ['-v']).status === 0;
+
+test("an archive written by the system's own zip is read the same as the folder it was made from", { skip: !canZip }, (t) => {
+  const liveKey = ['sk', 'live', 'Zk9aB3xY7Qw8eR5tY2Mn4bV6'].join('_');
+  const root = makeProject(t, {
+    'tree/site/app.js': BUNDLE,
+    'tree/site/app.js.map': MAP_WITH_SOURCES,
+    'tree/site/config.yaml': `stripe: ${liveKey}\n`,
+    'tree/site/Shop.app/Shop': buildMachO({ symbols: names(LOCAL_NAME, 150), signature: { flags: AD_HOC } }),
+    'tree/site/photo.png': 'PNG',
+  });
+  assert.equal(spawnSync('zip', ['-q', '-r', join(root, 'site.zip'), 'site'], { cwd: join(root, 'tree') }).status, 0);
+  const comparable = (result, prefix) =>
+    result.findings.map(({ rule, severity, path, detail }) => JSON.stringify([rule, severity, path.replace(prefix, ''), detail])).sort();
+
+  const fromFolder = scan(join(root, 'tree'));
+  const fromArchive = scan(join(root, 'site.zip'));
+
+  assert.equal(fromFolder.findings.length, 4);
+  assert.deepEqual(comparable(fromArchive, 'site.zip:/'), comparable(fromFolder, ''));
+  // The archive itself is one more file met and read.
+  assert.deepEqual(
+    [fromArchive.filesSeen, fromArchive.filesScanned, fromArchive.programsScanned, fromArchive.scriptsScanned],
+    [fromFolder.filesSeen + 1, fromFolder.filesScanned + 1, fromFolder.programsScanned, fromFolder.scriptsScanned],
+  );
+});
+
+test('names that stay in a stripped program are counted in a note that says which a setting can take out', (t) => {
+  const signature = { flags: HARDENED_RUNTIME };
+  const stripped = { symbols: [{ type: EXPORTED_NAME, name: '__mh_execute_header' }], signature };
+  const root = makeProject(t, {
+    // Two builds in one file: the one with the most names speaks for it.
+    'Shop.app/Contents/MacOS/Shop': buildUniversal([
+      buildMachO({ ...stripped, cpuType: X86_64, sections: { __objc_classname: cStrings('ReceiptPrinter') } }),
+      buildMachO({
+        ...stripped,
+        sections: {
+          // Two Swift classes in mangled form, a class written in Objective-C, and bytes that describe a layout.
+          __objc_classname: cStrings('_TtC4Shop11OrderClient', '_TtC4Shop16LicenseValidator', 'ReceiptPrinter', '\x01\x11'),
+          // A method name, a property name that Swift lists too, and two type descriptions.
+          __objc_methname: cStrings('submitOrderWithSubtotalCents:discountCents:', 'endpoint', 'T@"NSURL",N,R', 'v16@0:8'),
+          __swift5_reflstr: cStrings('endpoint', 'loyaltyRate', 'bulk'),
+          // One four-byte record for each Swift type, in the two sections that list them:
+          // the two classes, a struct and an enum.
+          __swift5_types: Buffer.alloc(4 * 3),
+          __swift5_types2: Buffer.alloc(4),
+        },
+      }),
+    ]),
+    // A program with nothing of the kind gets no note, and neither does a step of the build.
+    'Shop.app/Contents/Helpers/tool': buildMachO(stripped),
+    'Shop.app/Contents/Resources/step.o': buildMachO({ fileType: OBJECT, sections: { __objc_classname: cStrings('Leftover') } }),
+    'Printer.app/Contents/MacOS/Printer': buildMachO({
+      ...stripped,
+      sections: { __objc_classname: cStrings('ReceiptPrinter'), __objc_methname: cStrings('printReceipt:') },
+    }),
+    'linux/server': linuxProgram(4096),
+  });
+
+  const result = scan(join(root, 'Shop.app'));
+  const swiftReport = runCli([join(root, 'Shop.app'), '--lang', 'en']).stdout;
+  const objcReport = runCli([join(root, 'Printer.app'), '--lang', 'en']).stdout;
+  const linuxReport = runCli([join(root, 'linux'), '--lang', 'en']).stdout;
+
+  assert.deepEqual(
+    result.findings.map(({ rule, severity, path, detail }) => [rule, severity, path, detail]),
+    [
+      [
+        'kept-names',
+        'info',
+        'Contents/MacOS/Shop',
+        {
+          architecture: 'arm64',
+          // A Swift class is in both lists and is one type; a name in both lists is one name.
+          types: 5,
+          members: 4,
+          swiftTypes: 4,
+          objcClassNames: 3,
+          swiftFieldNames: 3,
+          objcMethodNames: 2,
+          sampleType: 'OrderClient',
+          sampleMember: 'submitOrderWithSubtotalCents:discountCents:',
+        },
+      ],
+    ],
+  );
+  // What cannot be closed is a note: the result is not rated worse for it.
+  assert.equal(result.risk, 'baseline');
+  assert.match(
+    swiftReport,
+    /- Contents\/MacOS\/Shop \(arm64: 5 type names, for example OrderClient · 4 names of properties and methods, for example submitOrderWithSubtotalCents:discountCents:\)/,
+  );
+  // The setting is named where it has something to take out, and the same thing is not said twice.
+  assert.match(swiftReport, /Reflection Metadata Level set to Without Names/);
+  assert.doesNotMatch(objcReport, /Reflection Metadata Level/);
+  assert.doesNotMatch(swiftReport, /A stripped program still carries/);
+  assert.match(linuxReport, /A stripped program still carries the names it needs to run/);
+});
+
+test('stripping with the real tools takes out the names that are reported, and the class names stay', { skip: !canSignMacApps }, (t) => {
+  const steps = Array.from({ length: 120 }, (_, index) => `static int step${index}(int value) { return value * ${index + 3}; }`);
+  const calls = Array.from({ length: 120 }, (_, index) => `total += step${index}(argc);`);
+  const root = makeProject(t, {
+    'main.m': [
+      '#import <Foundation/Foundation.h>',
+      '@interface ReceiptValidator : NSObject',
+      '- (BOOL)validateReceipt:(NSData *)receipt forProduct:(NSString *)product;',
+      '@end',
+      '@implementation ReceiptValidator',
+      '- (BOOL)validateReceipt:(NSData *)receipt forProduct:(NSString *)product { return receipt.length > 0 && product.length > 0; }',
+      '@end',
+      ...steps,
+      'int main(int argc, char **argv) {',
+      '  int total = [[ReceiptValidator new] validateReceipt:[NSData data] forProduct:@"pro"];',
+      ...calls,
+      '  return total == 0;',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const plain = join(root, 'plain');
+  const stripped = join(root, 'stripped');
+  assert.equal(spawnSync('clang', ['-fobjc-arc', '-framework', 'Foundation', '-o', plain, join(root, 'main.m')]).status, 0);
+  writeFileSync(stripped, readFileSync(plain));
+  assert.equal(spawnSync('strip', [stripped]).status, 0);
+  const found = (path, rule) => scan(path).findings.find((finding) => finding.rule === rule)?.detail;
+
+  // Built and stripped here, and never started.
+  assert.ok(found(plain, 'native-symbols').names >= 120);
+  assert.equal(found(stripped, 'native-symbols'), undefined);
+  assert.equal(found(stripped, 'kept-names').sampleType, 'ReceiptValidator');
+  assert.deepEqual(found(stripped, 'kept-names'), found(plain, 'kept-names'));
+});
+
+test('a file that only lays out data is not taken for code left unminified', (t) => {
+  // What Next.js 16.2 wrote into a build: the list of pages, spread over ten lines.
+  const pageList = [
+    'self.__BUILD_MANIFEST = {',
+    '  "__rewrites": {',
+    '    "afterFiles": [],',
+    '    "beforeFiles": [],',
+    '    "fallback": []',
+    '  },',
+    '  "sortedPages": [',
+    '    "/_app",',
+    '    "/_error"',
+    '  ]',
+    '};self.__BUILD_MANIFEST_CB && self.__BUILD_MANIFEST_CB()',
+  ].join('\n');
+  const handwritten = [
+    'function total(lines) {',
+    '  let sum = 0;',
+    '  for (const line of lines) {',
+    '    if (line.quantity > 0) sum += line.price * line.quantity;',
+    '  }',
+    '  return sum;',
+    '}',
+    'const rate = 0.1;',
+    'export function withTax(lines) {',
+    '  return total(lines) * (1 + rate);',
+    '}',
+    '',
+  ].join('\n');
+  const root = makeProject(t, {
+    'package.json': '{"dependencies":{"next":"16.2.10"}}',
+    '.next/static/build-id/_buildManifest.js': pageList,
+    '.next/static/chunks/app.js': handwritten,
+  });
+
+  const result = scan(root);
+
+  assert.deepEqual(
+    result.findings.map(({ rule, path }) => [rule, path]),
+    [['unminified-code', '.next/static/chunks/app.js']],
+  );
 });

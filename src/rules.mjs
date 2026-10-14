@@ -86,7 +86,7 @@ export function archiveFinding(path, fileCount) {
 /**
  * Checks that need only where a file sits and what it is called.
  *
- * @param {{ path: string, name: string, extension: string, isInsideArchive: boolean }} file
+ * @param {{ path: string, name: string, extension: string, isInsideAsar: boolean }} file
  * @returns {Finding[]}
  */
 export function checkPath(file) {

@@ -64,7 +64,7 @@ Every report starts with the risk.
 
 There is no "safe" level, because there is no such state: see "What it cannot do".
 
-Right under the count of files read, the report says what it met and did not read: disk images and archives it does not open, files too large to read, and how many files it passed over because there is nothing to find in them (pictures, sound, video, fonts, compressed files). The result is "not rated", never "baseline", when nothing could be read, and also when a container stayed unopened and no program or script was read beside it: what ships is then most likely inside the container.
+Right under the count of files read, the report says what it met and did not read: disk images and installers it does not open, archives it could not read, files it could not open (no permission, a password, a kind of compression it does not undo), files too large to read, and how many files it passed over because there is nothing to find in them (pictures, sound, video, fonts, compressed files). The result is "not rated", never "baseline", when no file's content could be read, and also when something was left unread and no program or script was read beside it: what ships is then most likely in what was left.
 
 Below the risk, the report counts kinds of leak, each at its worst severity. Three hundred exposed maps are the same mistake as one. Notes are not counted.
 
@@ -82,7 +82,7 @@ Exit codes: 0 when no leak at the `--fail-on` level or above was found (the leve
 
 Options: `--json` for machine-readable output, `--yes` to skip the question in `fix` and `measure`, `--fail-on critical|high|medium` for the mildest leak that makes the exit code 1, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
 
-The path can be a build output folder, a packaged app, a single program or an Electron `.asar` archive, and it is scanned as given. Only a JavaScript project folder, one with a `package.json`, is searched for its output: Reaproof looks there for `.next/static`, `out`, `dist`, `build`, `release` and `.output/public`, and the report says the folders were picked by name. For a project in another language (a folder with `Package.swift`, an Xcode project, `Cargo.toml`, `go.mod` and the like) it does not guess where the build went. Point it at the thing that ships, for example the `.app`.
+The path can be a build output folder, a packaged app, a single program, or an archive such as a `.zip`, an `.ipa` or an Electron `.asar`, and it is scanned as given. Only a JavaScript project folder, one with a `package.json`, is searched for its output: Reaproof looks there for `.next/static`, `out`, `dist`, `build`, `release` and `.output/public`, and the report says the folders were picked by name. For a project in another language (a folder with `Package.swift`, an Xcode project, `Cargo.toml`, `go.mod` and the like) it does not guess where the build went. Point it at the thing that ships, for example the `.app`.
 
 ## What it checks
 
@@ -101,6 +101,7 @@ The path can be a build output folder, a packaged app, a single program or an El
 | Source and test files packed into the app or output | Medium | No, take them out of the packaging list |
 | Long text in client code that looks like an AI prompt | Medium, a guess | No, keep prompts on a server |
 | Code that is not minified | Medium | No, turn on minification |
+| Names that stay in a macOS or iOS program after stripping: Swift types, properties and enum cases, Objective-C classes and methods | Note | In part: a build setting leaves out the names of Swift properties and cases, at a price. See "Native programs" |
 | Notes and scripts written for developers (`.md`, `.py`, `.sh` and the like) | Note | A list to review; on a website each one gets a public address |
 | Server addresses named in the code | Note | Cannot be hidden; a list to review |
 | Electron `.asar` archives, which anyone can unpack | Note | No |
@@ -113,21 +114,52 @@ For the `.env` comparison, Reaproof reads the `.env` files of the project the pa
 
 Every file under the path is read, whatever it is called. The exceptions are named in the report: containers that are not opened, and pictures, sound, video, fonts and compressed files, in which there is nothing to find. `node_modules` is not entered, because dependencies are public code.
 
-- JavaScript, CSS, HTML, JSON and source map files are read whole. JavaScript gets every check in the table above. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`.
+An archive is opened and each file in it is read as if it lay on disk. A ZIP archive is told by how it opens and not by its name, so `.zip`, `.ipa`, `.apk`, `.aab`, `.jar`, `.msix` and other files in that format are all read, and so is an Electron `.asar`. An archive inside an archive is opened too, three deep. Nothing is unpacked to disk.
+
+- JavaScript, CSS, HTML, JSON and source map files are read whole, as UTF-8 or, when the file opens with its mark, UTF-16. JavaScript gets every check in the table above. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`.
 - Every other file is searched for keys and `.env` values a piece at a time. A file with no zero byte anywhere in it is text, whatever it is called: there a key has to stand apart from what is around it, and a private key is reported, as in an Apple `.p8` key file left in an app.
 - Anything else is searched as bytes: programs, bytecode, data files. A key is found there also where strings are stored end to end with nothing between them, as Rust, Go and Hermes bytecode store them, and where text is kept two bytes to a character, as Windows programs keep it.
 - Two things are not reported in bytes. A private key, because TLS libraries compile their self-test keys into programs in the same form. And an AWS key ID that sits in a long run of base64, or holds fewer than ten different characters: encoded data spells one out by chance, as the WebAssembly inside Node.js does.
+- A file in an archive is held in memory while it is read, so one over 512 MB is not read. An archive is never trusted about its own size: a file in it cannot come out larger than it states, and at most 2 GB is unpacked out of one archive, the archives inside it included, the smallest files first. Measured on a 1 MB archive whose one file states 1 MB and holds 1 GB: it is refused in 0.04 seconds with 55 MB of memory in use, where the same read without that stop used 2.1 GB. A file that is encrypted, or packed in a way other than the usual two (stored and deflated), is named as not opened, and so is an archive that lists more than 250,000 files or folders.
 
 ## Native programs
 
 Reaproof tells a native program by how the file opens, not by its name, and reads it without running it or any other tool, so the result is the same on every machine.
 
 - A macOS or iOS program (Mach-O) is read for what it says about itself: its symbol table and its signature. This covers every program and library in an app, frameworks and helper programs included, and each processor's build of a universal binary.
-- For a program, every name it defines counts, the ones it exports too: nothing links against a program, and plain `strip` takes out all of them but one. For a library, the exported names have to stay, so only the rest count, which is what `strip -x` takes out. A file with fewer than 100 names and no original paths is not reported.
+- For a program, every name it defines counts, the ones it exports too: nothing links against a program, and plain `strip` takes out all of them but one. For a library, the exported names have to stay, so only the rest count, which is what `strip -x` takes out. A file with fewer than 100 names and no original paths is not reported. In an Xcode build the settings Strip Linked Product (`STRIP_INSTALLED_PRODUCT`) and Strip Style (`STRIP_STYLE`) do the stripping.
+- Some names stay after stripping, because the program uses them while it runs: Swift types, the names of Swift properties and enum cases, Objective-C classes and methods. Reaproof counts them from the sections that hold them and lists them as a note, with one name of each kind as an example. The names of Swift properties and cases can be left out with a build setting (Xcode: Reflection Metadata Level set to Without Names; `swiftc -Xfrontend -disable-reflection-names`), but code that turns such a name into text then behaves differently, so test before you ship it. The rest cannot be taken out.
 - Each program is judged by its own signature, by the rules of the system it is built for. A helper inside a hardened Mac app can still be signed without the Hardened Runtime, and it is the helper that gets reported. An iOS program has no Hardened Runtime to turn on, and is checked for `get-task-allow` only.
 - The numbers come from the symbol table itself, for the processor's build that has the most names. Apple's `nm` adds entries of its own for a stripped program (`<redacted function 1>` and so on), so to compare, run `nm --no-dyldinfo`.
 - Keep the debug information (`.dSYM`) before you strip, outside what ships. It is what makes crash reports readable.
 - A Windows or Linux program is searched for keys, and for Electron's fuse list, which sits in Electron's own binary on every system.
+
+## What the fixes change, measured
+
+Measured on 2026-10-14 with rea 6.4.0, on macOS on Apple silicon, on two small apps written for the purpose. The numbers say what a fix changes in what a tool reads. They are not a promise about your app.
+
+A web app: four TypeScript files bundled with Bun 1.2.19.
+
+| Build | Original files rea names | Functions rea counts | Request sites rea counts |
+| --- | --- | --- | --- |
+| Minified, with its source map | 4 of 4 | 10 | 2 |
+| The same after `reaproof fix` | 0 | 10 | 2 |
+| Not minified, no map | 0 | 10 | 2 |
+
+The map held the text of all four files, character for character. Taking it out is what `fix` does. Minifying changed none of rea's counts: it removed the names of functions and constants and left every number and every rule of the logic where it was.
+
+A macOS program: Swift 6.3, 44 types, built with `swiftc -O`.
+
+| Build | Names in the symbol table (`nm`) | Classes rea lists by name | Instance variables rea lists by name |
+| --- | --- | --- | --- |
+| As built | 1,652 | 42 | 84 |
+| After `strip` | 1 | 42 | 84 |
+
+Stripping removed the names of functions and methods, and the program ran as before. It did not remove the names of types, properties and Objective-C methods: rea's own reader listed the same classes and instance variables before and after. Those are the names the note counts, and its counts for this program (44 Swift types, 42 Objective-C class names, 22 names of Swift properties and cases, 20 names of Objective-C methods and properties) match what `otool` shows in the same sections.
+
+Building with `-disable-reflection-names` took out the 22 names of Swift properties and enum cases, and changed what the program printed: an enum case came out as the name of its type.
+
+Not measured: what rea reads with a disassembler behind it (Hopper, Ghidra or IDA), which is where the names in the symbol table would show as function names, and none of which was installed. And what the Hardened Runtime and `get-task-allow` change in practice: those two findings rest on Apple's documentation.
 
 ## What it cannot do
 
@@ -163,16 +195,15 @@ It runs one fixed release of rea, 6.4.0, the one this version was tested against
 
 ## Not covered yet
 
-- Disk images, installers and archives (`.dmg`, `.pkg`, `.zip`, `.ipa`, `.apk` and the like). They are not opened. The report lists them as unread; point Reaproof at the app or folder inside. For a `.dmg` it says how to open one.
-- Names that `strip` cannot remove. The type and property names Swift keeps for reflection, and the class and method names of Objective-C, stay in a stripped program and are not counted.
+- Disk images, installers and archives that are not ZIP (`.dmg`, `.pkg`, `.7z`, `.rar`, `.tar`, `.tar.gz` and the like). They are not opened. The report lists them as unread; point Reaproof at the app or folder inside. For a `.dmg` it says how to open one. A ZIP with something in front of it, as a self-extracting program or a `.crx` has, is not opened either.
 - Names and signatures of Windows and Linux programs. They are searched for keys and for Electron's fuses, nothing more.
 - Server addresses and prompts inside a native program. Those two are looked for in JavaScript only.
 - Keys written in source map and CSS files. A map that embeds your sources is reported as critical by itself, but a key in those sources is not listed with it. A map embeds the sources of dependencies too, and their documentation carries example keys, so the two have to be told apart first.
 - Which certificate signed a macOS program. An ad-hoc or development signature is not told apart from a release one.
-- Android apps. There was no real APK to test a check against, so none was written.
+- Android apps, beyond what any archive gets. An `.apk` is opened and its files are searched for keys, but nothing that is Android's own is checked, and there was no real APK to try even that on.
 - Dependencies other than `node_modules`. A Python `site-packages` folder or a Ruby gem folder is read like your own files, so the notes, scripts and test keys of the libraries in it are reported as if they were yours.
 - Public-variable prefixes of frameworks other than the five listed above.
-- Very large files. A code or text file over 30 MB, any file over 30 MB inside an `.asar` archive, and any other file over 1 GB are not read. The report counts them as skipped, so a source map that large goes unrated.
+- Very large files. A code or text file over 30 MB, any file over 512 MB inside an archive, and any other file over 1 GB are not read. The report counts them as skipped, so a source map that large goes unrated.
 
 ## Development
 
@@ -180,7 +211,7 @@ It runs one fixed release of rea, 6.4.0, the one this version was tested against
 npm test
 ```
 
-No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files and run anywhere. One more test runs only on a Mac with `clang` and `codesign`: it builds and signs throwaway bundles, never starts them, and checks that Reaproof reads them the way `codesign` does.
+No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files and archives and run anywhere; each change is run on Linux, macOS and Windows with Node 18, 20, 22 and 24. Three more tests use the system's own tools where they are there. On a Mac with `clang` and `codesign`, two build, sign and strip throwaway programs, never start them, and check that Reaproof reads them the way `codesign` does and that `strip` takes out what was reported. Where `zip` is installed, one checks that an archive it wrote is read the same as the folder it was made from.
 
 ## License
 

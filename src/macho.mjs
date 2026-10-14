@@ -20,6 +20,32 @@ const SUBTYPE_MASK = 0x00ffffff;
 
 const LC_SYMTAB = 0x2;
 const LC_CODE_SIGNATURE = 0x1d;
+// A segment command lists the sections of one segment. Where the count of them sits, how
+// long each entry is and where an entry keeps its size and its place in the file differ
+// between the 32-bit and the 64-bit layout.
+const SECTIONS_BY_SEGMENT_COMMAND = {
+  0x1: { firstAt: 56, countAt: 48, entryBytes: 68, readSize: (entry) => entry.readUInt32LE(36), offsetAt: 40 },
+  0x19: { firstAt: 72, countAt: 64, entryBytes: 80, readSize: (entry) => Number(entry.readBigUInt64LE(40)), offsetAt: 48 },
+};
+const SECTION_NAME_BYTES = 16;
+// Sections that hold names the program needs while it runs: `strip` leaves them alone.
+// Objective-C keeps the names of classes and of methods and properties as strings. Swift
+// keeps one four-byte record for each type and, as strings, the names of stored properties
+// and enum cases.
+const OBJC_CLASS_NAMES = '__objc_classname';
+const OBJC_METHOD_NAMES = '__objc_methname';
+const SWIFT_FIELD_NAMES = '__swift5_reflstr';
+const SWIFT_TYPE_RECORDS = ['__swift5_types', '__swift5_types2'];
+const SWIFT_TYPE_RECORD_BYTES = 4;
+const NAME_SECTIONS = new Set([OBJC_CLASS_NAMES, OBJC_METHOD_NAMES, SWIFT_FIELD_NAMES, ...SWIFT_TYPE_RECORDS]);
+// The largest apps keep a few megabytes of such names. More than this is not read.
+const MAX_NAME_SECTION_BYTES = 16 * 1024 * 1024;
+// A name as code spells one, with the colons of an Objective-C method name. The same
+// sections hold type encodings and layout bytes, which are not names and do not look like one.
+const NAME = /^[A-Za-z_$.][\w$.:]*$/;
+// Swift classes are named in the Objective-C list too, in mangled form: `_Tt`, letters for
+// the kind, then each part of the name led by its length, as in `_TtC4Shop11OrderClient`.
+const SWIFT_MANGLED_CLASS = /^_Tt[A-Z]+((?:\d+[^\d].*)?)$/;
 const LC_BUILD_VERSION = 0x32;
 // Builds from before LC_BUILD_VERSION say what they are for by which "minimum version"
 // command they carry: macOS, iOS, tvOS or watchOS.
@@ -62,7 +88,22 @@ const MAX_ENTITLEMENTS_BYTES = 1024 * 1024;
  * @property {number} localNames names of functions and variables that nothing outside the file needs
  * @property {number} exportedNames names defined here that other files may link against
  * @property {string[]} sourcePaths the original files, as the linker recorded where they were
+ * @property {KeptNames} keptNames
  * @property {{ flags: number, entitlements: string } | null} signature null when the build is not signed
+ */
+
+/**
+ * Names that are part of how the program runs, and so are still there after stripping.
+ *
+ * @typedef {object} KeptNames
+ * @property {number} types Swift types, and Objective-C classes that are not Swift's
+ * @property {number} members different names of properties, enum cases and methods
+ * @property {number} swiftTypes records in the Swift type list
+ * @property {number} objcClassNames names in the Objective-C class name list, Swift classes among them
+ * @property {number} swiftFieldNames names of Swift stored properties and enum cases
+ * @property {number} objcMethodNames names of Objective-C methods and properties
+ * @property {string | null} sampleType one type name, to show
+ * @property {string | null} sampleMember one member name, to show
  */
 
 /**
@@ -133,6 +174,7 @@ function readImage(read) {
 
   let symbolTable = null;
   let signature = null;
+  const nameSections = new Map();
   // A build that does not say what it is for is taken as one for the Mac.
   let platform = MACOS_PLATFORM;
   // A read past the end of the commands throws, which also ends a count that is not true.
@@ -153,6 +195,8 @@ function readImage(read) {
       platform = commands.readUInt32LE(offset + 8);
     } else if (command in PLATFORM_BY_VERSION_COMMAND) {
       platform = PLATFORM_BY_VERSION_COMMAND[command];
+    } else if (command in SECTIONS_BY_SEGMENT_COMMAND) {
+      collectNameSections(commands.subarray(offset, offset + size), SECTIONS_BY_SEGMENT_COMMAND[command], nameSections);
     }
     offset += size;
   }
@@ -162,6 +206,7 @@ function readImage(read) {
     kind: FILE_KINDS[header.readUInt32LE(12)] ?? 'other',
     system: SYSTEM_BY_PLATFORM[platform] ?? 'other',
     ...(symbolTable ? readSymbols(read, symbolTable, SYMBOL_BYTES[magic]) : NO_SYMBOLS),
+    keptNames: readKeptNames(read, nameSections),
     signature: signature && readSignature(readerWithin(read, signature.offset, signature.bytes)),
   };
 }
@@ -181,9 +226,7 @@ function readSymbols(read, { offset, count, namesOffset, namesBytes }, symbolByt
   const sourceNames = [];
   const readName = (nameOffset) => {
     if (nameOffset >= namesBytes) return '';
-    const name = read(namesOffset + nameOffset, Math.min(MAX_NAME_BYTES, namesBytes - nameOffset));
-    const end = name.indexOf(0);
-    return name.toString('utf8', 0, end === -1 ? name.length : end);
+    return textBeforeZero(read(namesOffset + nameOffset, Math.min(MAX_NAME_BYTES, namesBytes - nameOffset)), 'utf8');
   };
 
   for (let first = 0; first < count; first += SYMBOLS_PER_READ) {
@@ -225,6 +268,71 @@ function joinSourcePaths(names) {
     }
   }
   return [...paths];
+}
+
+/** @returns {string} the text up to the first zero byte, or all of it when there is none */
+function textBeforeZero(bytes, encoding) {
+  const end = bytes.indexOf(0);
+  return bytes.toString(encoding, 0, end === -1 ? bytes.length : end);
+}
+
+/** Notes where the sections that hold names sit, of those one segment command lists. */
+function collectNameSections(segment, { firstAt, countAt, entryBytes, readSize, offsetAt }, nameSections) {
+  const sectionCount = segment.readUInt32LE(countAt);
+  for (let index = 0; index < sectionCount; index += 1) {
+    const entry = segment.subarray(firstAt + index * entryBytes, firstAt + (index + 1) * entryBytes);
+    if (entry.length < entryBytes) throw new Error('a segment lists more sections than it holds');
+    const name = textBeforeZero(entry.subarray(0, SECTION_NAME_BYTES), 'latin1');
+    if (NAME_SECTIONS.has(name)) nameSections.set(name, { offset: entry.readUInt32LE(offsetAt), bytes: readSize(entry) });
+  }
+}
+
+/**
+ * @param {(offset: number, length: number) => Buffer} read stays inside the slice
+ * @param {Map<string, { offset: number, bytes: number }>} sections from `collectNameSections`
+ * @returns {KeptNames}
+ */
+function readKeptNames(read, sections) {
+  const stringsIn = (name) => {
+    const section = sections.get(name);
+    if (!section) return [];
+    const bytes = read(section.offset, Math.min(section.bytes, MAX_NAME_SECTION_BYTES));
+    return bytes.toString('latin1').split('\0').filter(Boolean);
+  };
+  const classNames = stringsIn(OBJC_CLASS_NAMES).filter((name) => NAME.test(name));
+  const methodNames = stringsIn(OBJC_METHOD_NAMES).filter((name) => NAME.test(name));
+  const fieldNames = stringsIn(SWIFT_FIELD_NAMES);
+  const swiftTypes = SWIFT_TYPE_RECORDS.reduce(
+    (sum, name) => sum + Math.floor((sections.get(name)?.bytes ?? 0) / SWIFT_TYPE_RECORD_BYTES),
+    0,
+  );
+  const memberNames = [...new Set([...fieldNames, ...methodNames])];
+  return {
+    // A Swift class is in both lists, and is counted once, as a Swift type.
+    types: swiftTypes + classNames.filter((name) => !SWIFT_MANGLED_CLASS.test(name)).length,
+    members: memberNames.length,
+    swiftTypes,
+    objcClassNames: classNames.length,
+    swiftFieldNames: fieldNames.length,
+    objcMethodNames: methodNames.length,
+    sampleType: classNames.length > 0 ? plainClassName(classNames[0]) : null,
+    // The longest of the first few says the most: a method name spells out what it takes.
+    sampleMember: memberNames.slice(0, 64).reduce((longest, name) => (name.length > longest.length ? name : longest), '') || null,
+  };
+}
+
+/** @returns {string} `OrderClient` for `_TtC4Shop11OrderClient`; any other name as it is */
+function plainClassName(name) {
+  let rest = SWIFT_MANGLED_CLASS.exec(name)?.[1];
+  let last = name;
+  while (rest) {
+    const length = Number.parseInt(rest, 10);
+    const start = String(length).length;
+    if (!Number.isInteger(length) || length === 0 || start + length > rest.length) return name;
+    last = rest.slice(start, start + length);
+    rest = rest.slice(start + length);
+  }
+  return last;
 }
 
 /** @param {(offset: number, length: number) => Buffer} read stays inside the signature */

@@ -4,6 +4,11 @@
 // A file of a few lines says too little either way.
 const MIN_HANDWRITTEN_LINES = 10;
 const MAX_HANDWRITTEN_LINE_LENGTH = 200;
+// What minifying takes away is the names and the layout of code. A file that only lays out
+// data has neither to lose, however many lines it runs to: the page list Next.js writes
+// into a build is one such, and no setting of the project's would minify it.
+const CODE_WORD = /\b(?:function|return|const|let|var|class|if|for|while|import|export)\b|=>/g;
+const MIN_CODE_WORDS = 5;
 
 const ABSOLUTE_ADDRESS = /https?:\/\/[A-Za-z0-9.-]{1,253}(?::\d{1,5})?(?:\/[A-Za-z0-9_\-./%:@~+]{0,200})?/g;
 const RELATIVE_API_PATH = /["'`](\/(?:api|graphql|rest|rpc)\b[A-Za-z0-9_\-./:[\]{}$]{0,120})/g;
@@ -26,7 +31,17 @@ export function checkUnminifiedCode(path, text) {
   const lineCount = countLines(text);
   const averageLineLength = Math.round(text.length / lineCount);
   if (lineCount < MIN_HANDWRITTEN_LINES || averageLineLength >= MAX_HANDWRITTEN_LINE_LENGTH) return [];
+  if (!holdsCode(text)) return [];
   return [{ rule: 'unminified-code', severity: 'medium', path, detail: { averageLineLength } }];
+}
+
+function holdsCode(text) {
+  let count = 0;
+  for (const _ of text.matchAll(CODE_WORD)) {
+    count += 1;
+    if (count === MIN_CODE_WORDS) return true;
+  }
+  return false;
 }
 
 /**
