@@ -30,11 +30,11 @@ const RUN_INTO_ABSOLUTE = /\/(?:Users|home|root|usr|opt|var|tmp|private|Volumes|
 // `library` of a Rust built from source.
 const RELATIVE_OPENINGS = ['src', 'library'];
 // Rust's standard library, and what it is built from. Official builds name it by a stand-in
-// for the folder they were built in; a Rust built from source, as Homebrew's is, by its own
-// `library` folder, often relative to it. It is in every Rust program, and says nothing of
-// yours but that the program is a Rust one.
+// for the folder they were built in, followed on Windows by a backslash; a Rust built from
+// source, as Homebrew's is, by its own `library` folder, often relative to it. It is in every
+// Rust program, and says nothing of yours but that the program is a Rust one.
 const STANDARD_LIBRARY =
-  /^\/rustc\/|^\/rust\/deps\/|(?:^|[\\/])library[\\/](?:core|std|alloc|proc_macro|test|panic_abort|panic_unwind|unwind|portable-simd|stdarch|backtrace)[\\/]/;
+  /^\/rustc[\\/]|^\/rust\/deps[\\/]|(?:^|[\\/])library[\\/](?:core|std|alloc|proc_macro|test|panic_abort|panic_unwind|unwind|portable-simd|stdarch|backtrace)[\\/]/;
 // Cargo unpacks each dependency under its own home folder, from a registry or a git
 // repository, or finds it in a vendor folder.
 const DEPENDENCY = /[\\/](?:registry[\\/]src|git[\\/]checkouts)[\\/]|(?:^|[\\/])vendor[\\/]/;

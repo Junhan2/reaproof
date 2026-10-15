@@ -2068,6 +2068,9 @@ test('a program built with Rust is noted for the paths of its own source files, 
     // official builds name them, and as a Rust built from source does, as Homebrew's is.
     `/rustc/${hash}/library/core/src/option.rs`,
     '/rust/deps/gimli-0.32.3/src/read/line.rs',
+    // The same, as the official Rust for Windows writes them.
+    `/rustc/${hash}/library\\std\\src\\panicking.rs`,
+    '/rust/deps\\rustc-demangle-0.1.28\\src\\v0.rs',
     'library/std/src/sys/pal/unix/mod.rs',
     '/private/tmp/rust-20261001-8f2k/rustc-1.98.1-src/library/core/src/str/mod.rs',
     // Dependencies, from a registry, a git repository and a vendor folder, two under the home folders that built them.
