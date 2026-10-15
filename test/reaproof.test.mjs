@@ -11,6 +11,7 @@ import { main } from '../src/cli.mjs';
 import { applyFix, planFix, undoLastFix } from '../src/fix.mjs';
 import { toWindowsShellArgument } from '../src/measure.mjs';
 import { scanDeployedSite } from '../src/remote.mjs';
+import { collectRustSourcePaths, startRustSourcePaths } from '../src/rust.mjs';
 import { CHUNK_BYTES, FILE_COST_BYTES, MAX_UNPACKED_BYTES, OVERLAP_BYTES, scan, ScanError, withoutFiles } from '../src/scan.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../bin/reaproof.mjs', import.meta.url));
@@ -562,9 +563,20 @@ test('a result without leaks is rated baseline, never safe', (t) => {
   const { status, stdout } = runCli([root, '--lang', 'en']);
 
   assert.equal(status, 0);
-  assert.match(stdout, /rea risk: baseline\n  None of the leaks this tool looks for was found\. Code structure, the text and values in it, and server addresses are still readable/);
+  assert.match(
+    stdout,
+    /rea risk: baseline\n  Levels: very high · high · moderate · \[baseline\]\n  None of the leaks this tool looks for was found\. Code structure, the text and values in it, and server addresses are still readable/,
+  );
   assert.match(stdout, /Leaks found: none/);
   assert.doesNotMatch(stdout, /\bsafe\b|100/);
+  // The report ends with the way on, which for a website's output takes in the deployed site.
+  assert.match(
+    stdout,
+    /What to do next:\n  1\. Run npx reaproof after every build before you ship\.[^\n]*\n  2\. After deploying, check the live site too: npx reaproof https:\/\/your-site\n$/,
+  );
+  // Nobody is at a terminal here, so nothing is said before the report and nothing is colored.
+  assert.match(stdout, /^Target: /);
+  assert.doesNotMatch(stdout, /\x1b\[/);
 });
 
 test('one run at a terminal reports the risk, takes out the maps on a yes and shows the new risk', async (t) => {
@@ -577,7 +589,9 @@ test('one run at a terminal reports the risk, takes out the maps on a yes and sh
 
   const output = terminal.printed.join('\n');
   assert.equal(exitCode, 0);
-  assert.match(output, /rea risk: very high\n  A tool like rea can take your original source/);
+  assert.equal(terminal.printed[0], 'Checking. This only reads; nothing is changed.');
+  assert.match(output, /rea risk: very high\n  Levels: \[very high\] · high · moderate · baseline\n  A tool like rea can take your original source/);
+  assert.match(output, /What to do next:\n  1\. Fix the findings above from the top: the most damaging come first\.\n  2\. Then rebuild/);
   assert.match(output, /1 map file\(s\) will be taken out of the output:\n  - dist\/app\.js\.map/);
   assert.match(output, /Done: 1 taken out\.\nrea risk: very high → baseline/);
   assert.deepEqual(terminal.questions, ['Continue? (y/N) ']);
@@ -2009,4 +2023,168 @@ test('a file that only lays out data is not taken for code left unminified', (t)
     result.findings.map(({ rule, path }) => [rule, path]),
     [['unminified-code', '.next/static/chunks/app.js']],
   );
+});
+
+test('a Tauri program is read and rated, and the screen code inside it is named as not read', (t) => {
+  const stripped = { symbols: [{ type: EXPORTED_NAME, name: '__mh_execute_header' }], signature: { flags: HARDENED_RUNTIME } };
+  // What Tauri 2 and Tauri 1 put into every program as it is; the screen code goes in compressed.
+  const tauri2 = Buffer.from('window.__TAURI_INTERNALS__ = window.__TAURI_INTERNALS__ ?? {};');
+  const tauri1 = Buffer.from('window.__TAURI_IPC__ = function (message) {};');
+  const root = makeProject(t, {
+    'Clip.app/Contents/MacOS/clip': buildMachO({ ...stripped, sections: { __const: tauri2 } }),
+    'Clip.app/Contents/Info.plist': '<plist></plist>',
+    'linux/clip': Buffer.concat([linuxProgram(4096), tauri1]),
+    // Tauri's own JavaScript names it too, and is read as the code it is, in a project that makes an app.
+    'web/package.json': '{"devDependencies":{"@tauri-apps/cli":"2.11.0"}}',
+    'web/dist/app.js': 'const i=window.__TAURI_INTERNALS__;',
+  });
+
+  const app = scan(join(root, 'Clip.app'));
+  const appReport = runCli([join(root, 'Clip.app'), '--lang', 'en']).stdout;
+  const webReport = runCli([join(root, 'web'), '--lang', 'en']).stdout;
+
+  assert.deepEqual(app.unreadScreenCode, ['Contents/MacOS/clip']);
+  assert.equal(app.risk, 'baseline');
+  assert.deepEqual(scan(join(root, 'linux')).unreadScreenCode, ['clip']);
+  assert.deepEqual(scan(join(root, 'web')).unreadScreenCode, []);
+  assert.match(
+    appReport,
+    /Files read: 2[^\n]*\n  The screen code \(HTML, JavaScript\) inside 1 Tauri program\(s\) \(Contents\/MacOS\/clip\) was not read\. Run npx reaproof in the project folder/,
+  );
+  // What was not read is the first thing to do, and an app's output is no website to check.
+  assert.match(appReport, /What to do next:\n  1\. Check what was not read, as said above\./);
+  assert.match(webReport, /What to do next:\n  1\. Run npx reaproof after every build/);
+  assert.doesNotMatch(webReport, /check the live site/);
+});
+
+test('a program built with Rust is noted for the paths of its own source files, and for a home folder in any', (t) => {
+  const hash = 'ab'.repeat(20);
+  // Strings stored end to end, the way a program stores them.
+  const strings = [
+    '\0src/billing.rs',
+    'called `Option::unwrap()` on a `None` valuesrc/main.rs',
+    'src/billing.rs',
+    // Rust's standard library and what it is built from, which are in every Rust program: as
+    // official builds name them, and as a Rust built from source does, as Homebrew's is.
+    `/rustc/${hash}/library/core/src/option.rs`,
+    '/rust/deps/gimli-0.32.3/src/read/line.rs',
+    // The same, as the official Rust for Windows writes them.
+    `/rustc/${hash}/library\\std\\src\\panicking.rs`,
+    '/rust/deps\\rustc-demangle-0.1.28\\src\\v0.rs',
+    'library/std/src/sys/pal/unix/mod.rs',
+    '/private/tmp/rust-20261001-8f2k/rustc-1.98.1-src/library/core/src/str/mod.rs',
+    // Dependencies, from a registry, a git repository and a vendor folder, two under the home folders that built them.
+    '/Users/builder/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/memchr-2.8.0/src/memchr.rs',
+    '/home/ci/.cargo/git/checkouts/whisper-rs-0123456789abcdef/fedcba9/src/lib.rs',
+    '/private/tmp/rust-20261001-8f2k/rustc-1.98.1-src/vendor/gimli-0.31.1/src/read/line.rs',
+    // Neither an address nor a section name is a source file.
+    'https://github.com/rust-lang/rust/blob/master/library/core/src/str/mod.rs',
+    '.rsrc\0',
+  ].join('');
+  const standard = `/rustc/${hash}/library/core/src/option.rs`;
+  // Built with the home folder replaced, one with Rust's own paths alone, and a program that is not a Rust one.
+  const remapped = `\0src/main.rs~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/memchr-2.8.0/src/memchr.rs${standard}\0`;
+  const go = '\0text/xml.rs\0font/otf.rs\0';
+  // A path across the place where one stretch of a large file ends and the next starts is read once.
+  const large = linuxProgram(CHUNK_BYTES + 4096);
+  large.write(`\0${standard}\0`, 1024, 'latin1');
+  large.write('\0src/ab/cd/boundary.rs\0', CHUNK_BYTES - 8, 'latin1');
+  const root = makeProject(t, {
+    'mac/tool': buildMachO({ sections: { __const: Buffer.from(strings, 'latin1') } }),
+    'remapped/tool': Buffer.concat([linuxProgram(4096), Buffer.from(remapped, 'latin1')]),
+    'standard/tool': Buffer.concat([windowsProgram(4096), Buffer.from(`\0${standard}\0`, 'latin1')]),
+    'go/tool': Buffer.concat([linuxProgram(4096), Buffer.from(go, 'latin1')]),
+    'large/tool': large,
+    // The same text in a file that is not a program says nothing about how a program was built.
+    'notes/strings.bin': Buffer.from(strings, 'latin1'),
+  });
+  const noteIn = (folder) =>
+    scan(join(root, folder))
+      .findings.filter(({ rule }) => rule === 'source-paths')
+      .map(({ path, detail }) => [path, detail]);
+
+  assert.deepEqual(noteIn('mac'), [['tool', { ownFiles: 2, dependencyFiles: 3, namesBuilder: true, sample: 'src/billing.rs' }]]);
+  assert.deepEqual(noteIn('remapped'), [['tool', { ownFiles: 1, dependencyFiles: 1, namesBuilder: false, sample: 'src/main.rs' }]]);
+  assert.deepEqual(noteIn('standard'), []);
+  assert.deepEqual(noteIn('go'), []);
+  assert.deepEqual(noteIn('large'), [['tool', { ownFiles: 1, dependencyFiles: 0, namesBuilder: false, sample: 'src/ab/cd/boundary.rs' }]]);
+  assert.deepEqual(noteIn('notes'), []);
+  const report = runCli([join(root, 'mac'), '--lang', 'en']).stdout;
+  assert.match(
+    report,
+    /\[NOTE\] Paths of the source files stay in the program as text\n  1 program file\(s\) built with Rust hold the paths of their source files as text\. The one with the most holds the paths of 2 file\(s\) of its own and 3 of its dependencies\./,
+  );
+  assert.match(report, /- tool \(2 file\(s\) of its own, for example src\/billing\.rs · 3 of dependencies\)/);
+  // How to replace the home folder is said where a home folder is in the program.
+  assert.match(report, /--remap-path-prefix=<home folder>=~/);
+  assert.doesNotMatch(runCli([join(root, 'remapped'), '--lang', 'en']).stdout, /--remap-path-prefix/);
+});
+
+const canBuildRust = spawnSync('cargo', ['--version']).status === 0;
+
+test('a program built by the real Rust tools is noted for its own source files alone', { skip: !canBuildRust }, (t) => {
+  const root = makeProject(t, {
+    'Cargo.toml': '[package]\nname = "probe"\nversion = "0.1.0"\nedition = "2021"\n\n[profile.release]\nstrip = true\n',
+    'src/main.rs': [
+      'mod billing;',
+      'fn main() {',
+      '    let args: Vec<String> = std::env::args().collect();',
+      '    println!("{} {}", &args[0], billing::total_cents(&args));',
+      '}',
+      '',
+    ].join('\n'),
+    'src/billing.rs': 'pub fn total_cents(args: &[String]) -> u64 {\n    args.get(1).expect("a price").parse::<u64>().unwrap() * 100\n}\n',
+  });
+  const built = spawnSync('cargo', ['build', '--release', '--offline', '--quiet'], {
+    cwd: root,
+    env: { ...process.env, CARGO_TARGET_DIR: join(root, 'target') },
+  });
+  assert.equal(built.status, 0, String(built.stderr));
+
+  // Built and stripped here, and never started.
+  const program = join(root, 'target', 'release', process.platform === 'win32' ? 'probe.exe' : 'probe');
+  const { sample, ...counts } = scan(program).findings.find(({ rule }) => rule === 'source-paths').detail;
+  // Should the count be off, the paths read say why: each system's tools write them their own way.
+  const found = startRustSourcePaths();
+  collectRustSourcePaths(readFileSync(program), false, found);
+  assert.deepEqual(counts, { ownFiles: 2, dependencyFiles: 0, namesBuilder: false }, JSON.stringify([...found.paths]));
+  assert.match(sample, /^src[\\/](?:main|billing)\.rs$/);
+});
+
+test('an example class name is shown as its code spells it, and one that cannot be is left out', (t) => {
+  const stripped = { symbols: [{ type: EXPORTED_NAME, name: '__mh_execute_header' }], signature: { flags: HARDENED_RUNTIME } };
+  const root = makeProject(t, {
+    // A Swift class declared inside a function: the function and its type come first, the class's own name last.
+    'local/app': buildMachO({
+      ...stripped,
+      sections: { __objc_classname: cStrings('_TtCF4Shop7processFT_T_L_13ReceiptHolder'), __swift5_types: Buffer.alloc(4) },
+    }),
+    // A generic class is followed by its type arguments, and has no name of its own to show.
+    'generic/app': buildMachO({
+      ...stripped,
+      sections: { __objc_classname: cStrings('_TtGC4Shop3BoxSi_'), __swift5_types: Buffer.alloc(4) },
+    }),
+  });
+  const sampleIn = (folder) => scan(join(root, folder)).findings.find(({ rule }) => rule === 'kept-names').detail.sampleType;
+
+  assert.equal(sampleIn('local'), 'ReceiptHolder');
+  assert.equal(sampleIn('generic'), null);
+  assert.match(runCli([join(root, 'generic'), '--lang', 'en']).stdout, /- app \(arm64: 1 type names · 0 names of properties and methods\)/);
+});
+
+test('at a terminal that takes color the rating and each kind of finding are colored, and JSON never is', async (t) => {
+  const root = makeProject(t, BUILT_PROJECT);
+  const colored = { ...makeTerminal(), color: true };
+  const json = { ...makeTerminal(), color: true };
+
+  await main([root, '--lang', 'en'], colored);
+  await main([root, '--json'], json);
+
+  const output = colored.printed.join('\n');
+  assert.match(output, /rea risk: \x1b\[1m\x1b\[31mvery high\x1b\[39m\x1b\[22m\n/);
+  assert.match(output, /Levels: \x1b\[1m\x1b\[31m\[very high\]\x1b\[39m\x1b\[22m · \x1b\[2mhigh\x1b\[22m/);
+  assert.match(output, /\x1b\[1m\x1b\[31m\[CRITICAL\]\x1b\[39m\x1b\[22m \x1b\[1mYour original source code is public\x1b\[22m/);
+  // A path is written as it was found: color is for the lines this tool writes.
+  assert.match(output, /\n  - dist\/app\.js\.map \(originals: \.\.\/src\/pricing\.ts\)\n/);
+  assert.doesNotMatch(json.printed.join('\n'), /\x1b\[/);
 });

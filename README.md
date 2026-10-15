@@ -1,10 +1,99 @@
+<div align="center">
+
 # Reaproof
 
-One command that rates how exposed your shipped app is to AI reverse-engineering agents, and closes what can be closed.
+**Before you ship, see what an AI agent could lift from your app, and close it in one command.**
 
-Tools such as [rea](https://github.com/morluto/rea) let a coding agent inspect a shipped app without its source, explain how a feature works and rebuild it. Reaproof checks what you ship for the things that make that easy, rates the risk, explains each finding in plain language, and fixes the ones that are safe to fix automatically.
+[![npm](https://img.shields.io/npm/v/reaproof?color=cb3837&label=npm)](https://www.npmjs.com/package/reaproof) [![test](https://github.com/Junhan2/reaproof/actions/workflows/test.yml/badge.svg)](https://github.com/Junhan2/reaproof/actions/workflows/test.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node 18.3 or later](https://img.shields.io/badge/node-%E2%89%A5%2018.3-339933)](https://nodejs.org)
+
+<img src="https://raw.githubusercontent.com/Junhan2/reaproof/main/docs/report.svg" width="808" alt="A terminal running npx reaproof on a web app: rea risk very high, because a source map holds the original source of four files; the map is taken out after a yes, and rea risk falls to baseline">
+
+<sub>A real run on the web test app from <a href="#what-the-fixes-change-measured">What the fixes change, measured</a>. Lines left out are marked ⋯; the whole output is under <a href="#how-a-run-goes">How a run goes</a>.</sub>
+
+</div>
+
+Tools such as [rea](https://github.com/morluto/rea) let a coding agent inspect a shipped app without its source, explain how a feature works and rebuild it. What makes that easy is usually left in by accident: a source map that carries every original file, a server key in the code, a `.git` folder copied into the output. Reaproof finds those, rates the risk, explains each finding in plain words, and takes out what is safe to take out.
 
 It is written for people who have never dealt with security before. There is nothing to install and nothing to configure. It needs Node.js 18.3 or later.
+
+```bash
+npx reaproof
+```
+
+## What it tells you
+
+Every report opens with the rea risk and where it sits on the scale.
+
+| | rea risk | What it means | What usually puts it there |
+| --- | --- | --- | --- |
+| 🔴 | **very high** | A tool like rea can take your original source or your secret values as they are | A source map that holds your source; a `.env` file, a `.git` folder or a server-only key in what ships |
+| 🟠 | **high** | Near-secret values, data, or the inside of the running app are exposed | A database file or debug symbols in the output; a test key; a program signed with `get-task-allow` |
+| 🟡 | **moderate** | Something left in makes the code easier to read, or the running app easier to get into | Code that is not minified; source maps that list file names; a program that kept its development names or runs without the Hardened Runtime |
+| 🟢 | **baseline** | None of the leaks this tool looks for was found | Code structure, the text and values in it, and server addresses are still readable, as in any shipped app |
+| ⚪ | **not rated** | What ships could not be read, so no rating is given | A disk image, an installer or an archive it does not open. It does not mean nothing leaks |
+
+There is no "safe" level, because there is no such state: see "What it cannot do".
+
+## How a run goes
+
+1. **It reads, and changes nothing.** In a JavaScript project folder it finds the build output by name (`dist`, `.next/static`, `out`, `build` and the like). Anything else it reads as given: a folder, an app, a program or an archive.
+2. **It rates and explains.** The rating comes first. Each finding follows, worst first, with what it exposes and how to close it. Right under the count of files read, it says what it did not read.
+3. **It offers the fix it can make.** It lists the source map files it can take out and, after a `y`, moves them out of your output into a backup. `npx reaproof undo` puts them back.
+4. **You close the rest and run it again.** Each finding names the setting to change. A finding that is gone is fixed. The report ends with what to do next.
+
+<details>
+<summary>The whole output of the run in the picture above</summary>
+
+```text
+Checking. This only reads; nothing is changed.
+Target: dist (output folders picked by name, next to package.json)
+Files read: 3
+
+rea risk: very high
+  Levels: [very high] · high · moderate · baseline
+  A tool like rea can take your original source or your secret values as they are.
+Leaks found: 1 kind (critical 1)
+
+[CRITICAL] Your original source code is public
+  1 source map file(s) contain the full text of 4 original file(s).
+  Anyone who downloads them reads the code exactly as you wrote it.
+  - dist/index.js.map (originals: ../../../src/pricing.ts, ../../../src/license.ts, ../../../src/client.ts, ../../../src/index.ts)
+  Fix: reaproof fix (takes the map files out of the output; can be undone)
+
+[NOTE] Server addresses that read straight from the code
+  1 server address(es) are in the code as they are. They cannot be hidden.
+  For each one, check that it is safe to call without signing in and never returns another user’s data.
+  - https://api.shop-lab.test/v2
+
+To keep them from coming back on the next build:
+  Turn off production source maps in your build tool settings.
+  If an error tracker needs the maps, upload them there and then delete them from the output.
+
+[NOTE] What cannot be hidden
+  Screen structure and the server addresses you call cannot be hidden once they reach a user device.
+  Compute anything that must not be copied, such as pricing or permission checks, on a server.
+  To see what is actually readable in the JavaScript, run reaproof measure.
+
+What to do next:
+  1. Fix the findings above from the top: the most damaging come first.
+  2. Then rebuild and run npx reaproof again. A finding that is gone is fixed.
+  3. After deploying, check the live site too: npx reaproof https://your-site
+
+1 map file(s) will be taken out of the output:
+  - dist/index.js.map
+Continue? (y/N) y
+Done: 1 taken out.
+rea risk: very high → baseline
+Leaks found: 1 kind (critical 1) → none
+Kept at: /tmp/reaproof-demo/backups/shop-web-48f3456db025/2026-10-15T16-20-49-622Z
+Undo: reaproof undo
+
+To keep them from coming back on the next build:
+  Turn off production source maps in your build tool settings.
+  If an error tracker needs the maps, upload them there and then delete them from the output.
+```
+
+</details>
 
 ## Three ways to use it
 
@@ -52,21 +141,13 @@ On Claude Code older than 2.1.275, run `/plugin marketplace add Junhan2/reaproof
 
 ## Reading the result
 
-Every report starts with the risk.
+Right under the count of files read, the report says what it met and did not read: disk images and installers it does not open, archives it could not read, files it could not open (no permission, a password, a kind of compression it does not undo), files too large to read, the screen code inside a Tauri app, and how many files it passed over because there is nothing to find in them (pictures, sound, video, fonts, compressed files). The result is "not rated", never "baseline", when no file's content could be read, and also when something was left unread and no program or script was read beside it: what ships is then most likely in what was left.
 
-| rea risk | What it means |
-| --- | --- |
-| very high | A tool like rea can take your original source or your secret values as they are |
-| high | Near-secret values, data, or the inside of the running app are exposed |
-| moderate | Something left in makes the code easier to read, or the running app easier to get into |
-| baseline | None of the leaks this tool looks for was found. Code structure, the text and values in it, and server addresses are still readable, as in any shipped app |
-| not rated | What ships could not be read, so no rating is given. It does not mean nothing leaks |
+Under the rea risk, one line shows every level with the result's own in brackets. Below it, the report counts kinds of leak, each at its worst severity. Three hundred exposed maps are the same mistake as one. Notes are not counted.
 
-There is no "safe" level, because there is no such state: see "What it cannot do".
+The report ends with what to do next: check first what it did not read, then fix from the top and run it again, or, when nothing leaks, run it after each build and check the deployed site as well.
 
-Right under the count of files read, the report says what it met and did not read: disk images and installers it does not open, archives it could not read, files it could not open (no permission, a password, a kind of compression it does not undo), files too large to read, and how many files it passed over because there is nothing to find in them (pictures, sound, video, fonts, compressed files). The result is "not rated", never "baseline", when no file's content could be read, and also when something was left unread and no program or script was read beside it: what ships is then most likely in what was left.
-
-Below the risk, the report counts kinds of leak, each at its worst severity. Three hundred exposed maps are the same mistake as one. Notes are not counted.
+At a terminal the rating and the kind of each finding are in color. Set `NO_COLOR` to turn color off; in a pipe, in CI and with `--json` there is none.
 
 Exit codes: 0 when no leak at the `--fail-on` level or above was found (the level is high unless you say otherwise, so a moderate result exits with 0), 1 when one was, 2 for a usage error or a target that could not be settled on, 3 when what ships could not be read (an address that did not answer, or a target with nothing in it that Reaproof opens).
 
@@ -88,23 +169,24 @@ The path can be a build output folder, a packaged app, a single program, or an a
 
 | Finding | Severity | Automatic fix |
 | --- | --- | --- |
-| Settings files (`.env`), a `.git` folder, key stores, database files and debug symbols mixed into the output | Critical or high | No, take them out and stop them being copied in. Keep debug symbols, somewhere else |
-| Server-only keys in shipped files, whether code, a script, a settings file of any name, a native program or bytecode: Stripe secret and restricted keys, Supabase secret and `service_role` keys, GitHub tokens, AWS access keys, private keys, AI service keys, database addresses that carry a password | Critical or high | No, revoke the key and move it to a server |
-| A secret value from the project's own `.env` that appears word for word in any shipped file | Critical or high | No, change the value and move it to a server |
-| Source map files that contain your original source text | Critical | Yes |
-| Source maps embedded inside code files | Critical | No, turn it off in the build settings |
-| A program signed with an entitlement that opens it up while it runs: `get-task-allow` on macOS or iOS (high), `disable-library-validation` on macOS (medium) | High or medium | No, leave it out of release signing |
-| Source map files that list file names without the source text | Medium | Yes |
-| A macOS or iOS program that kept its development names: the names of its functions and variables, and the paths of the original files on the machine that built it | Medium | No, strip the program before signing it |
-| A macOS program signed without the Hardened Runtime, or not signed at all | Medium | No, turn it on when signing |
-| A packaged Electron app with development fuses left on (`runAsNode`, `nodeOptions`, `nodeCliInspect`) | Medium | No, turn them off with `@electron/fuses` |
-| Source and test files packed into the app or output | Medium | No, take them out of the packaging list |
-| Long text in client code that looks like an AI prompt | Medium, a guess | No, keep prompts on a server |
-| Code that is not minified | Medium | No, turn on minification |
-| Names that stay in a macOS or iOS program after stripping: Swift types, properties and enum cases, Objective-C classes and methods | Note | In part: a build setting leaves out the names of Swift properties and cases, at a price. See "Native programs" |
-| Notes and scripts written for developers (`.md`, `.py`, `.sh` and the like) | Note | A list to review; on a website each one gets a public address |
-| Server addresses named in the code | Note | Cannot be hidden; a list to review |
-| Electron `.asar` archives, which anyone can unpack | Note | No |
+| Settings files (`.env`), a `.git` folder, key stores, database files and debug symbols mixed into the output | 🔴 Critical or 🟠 high | No, take them out and stop them being copied in. Keep debug symbols, somewhere else |
+| Server-only keys in shipped files, whether code, a script, a settings file of any name, a native program or bytecode: Stripe secret and restricted keys, Supabase secret and `service_role` keys, GitHub tokens, AWS access keys, private keys, AI service keys, database addresses that carry a password | 🔴 Critical or 🟠 high | No, revoke the key and move it to a server |
+| A secret value from the project's own `.env` that appears word for word in any shipped file | 🔴 Critical or 🟠 high | No, change the value and move it to a server |
+| Source map files that contain your original source text | 🔴 Critical | Yes |
+| Source maps embedded inside code files | 🔴 Critical | No, turn it off in the build settings |
+| A program signed with an entitlement that opens it up while it runs: `get-task-allow` on macOS or iOS (high), `disable-library-validation` on macOS (medium) | 🟠 High or 🟡 medium | No, leave it out of release signing |
+| Source map files that list file names without the source text | 🟡 Medium | Yes |
+| A macOS or iOS program that kept its development names: the names of its functions and variables, and the paths of the original files on the machine that built it | 🟡 Medium | No, strip the program before signing it |
+| A macOS program signed without the Hardened Runtime, or not signed at all | 🟡 Medium | No, turn it on when signing |
+| A packaged Electron app with development fuses left on (`runAsNode`, `nodeOptions`, `nodeCliInspect`) | 🟡 Medium | No, turn them off with `@electron/fuses` |
+| Source and test files packed into the app or output | 🟡 Medium | No, take them out of the packaging list |
+| Long text in client code that looks like an AI prompt | 🟡 Medium, a guess | No, keep prompts on a server |
+| Code that is not minified | 🟡 Medium | No, turn on minification |
+| Names that stay in a macOS or iOS program after stripping: Swift types, properties and enum cases, Objective-C classes and methods | 🔵 Note | In part: a build setting leaves out the names of Swift properties and cases, at a price. See "Native programs" |
+| Paths of Rust source files that a program keeps as text after stripping: its own files, and those of its dependencies, which can name the home folder of the machine that built it | 🔵 Note | In part: `--remap-path-prefix` replaces the home folder. See "Native programs" |
+| Notes and scripts written for developers (`.md`, `.py`, `.sh` and the like) | 🔵 Note | A list to review; on a website each one gets a public address |
+| Server addresses named in the code | 🔵 Note | Cannot be hidden; a list to review |
+| Electron `.asar` archives, which anyone can unpack | 🔵 Note | No |
 
 Keys that are meant for browsers, such as Stripe publishable keys and Supabase `anon` and publishable keys, are not reported. Neither is a key with the word `example` in it, which is how documentation and self-tests write a stand-in, nor the password of a database on the same machine (`localhost`, `127.0.0.1`). Secrets are never printed in full, and values from `.env` are reported by variable name only.
 
@@ -119,6 +201,7 @@ An archive is opened and each file in it is read as if it lay on disk. A ZIP arc
 - JavaScript, CSS, HTML, JSON and source map files are read whole, as UTF-8 or, when the file opens with its mark, UTF-16. JavaScript gets every check in the table above. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`.
 - Every other file is searched for keys and `.env` values a piece at a time. A file with no zero byte anywhere in it is text, whatever it is called: there a key has to stand apart from what is around it, and a private key is reported, as in an Apple `.p8` key file left in an app.
 - Anything else is searched as bytes: programs, bytecode, data files. A key is found there also where strings are stored end to end with nothing between them, as Rust, Go and Hermes bytecode store them, and where text is kept two bytes to a character, as Windows programs keep it.
+- A Tauri app keeps its screen code (HTML, JavaScript) compressed inside its program. The program is read and rated, but that code is not, and the report says so under the count of files read. Check it in the project folder, where `npx reaproof` reads the build output (`dist` and the like) before it is packed.
 - Two things are not reported in bytes. A private key, because TLS libraries compile their self-test keys into programs in the same form. And an AWS key ID that sits in a long run of base64, or holds fewer than ten different characters: encoded data spells one out by chance, as the WebAssembly inside Node.js does.
 - A file in an archive is held in memory while it is read, so one over 512 MB is not read. An archive is never trusted about itself. A file in it cannot come out larger than it states: on a 1 MB archive whose one file states 1 MB and holds 1 GB, the read is refused in 0.04 seconds with 55 MB of memory in use, where without that stop it used 2.1 GB. At most 2 GB is read out of one archive, the archives inside it included, the smallest files first, and every file counts for at least 2 kB of that: a 137 kB archive that holds another many times over and lists twenty million files is done with after about a million of them, in about a second. A file that is encrypted, or packed in a way other than the usual two (stored and deflated), is named as not opened, and so is an archive that lists more than 250,000 files or folders.
 
@@ -132,6 +215,7 @@ Reaproof tells a native program by how the file opens, not by its name, and read
 - Each program is judged by its own signature, by the rules of the system it is built for. A helper inside a hardened Mac app can still be signed without the Hardened Runtime, and it is the helper that gets reported. An iOS program has no Hardened Runtime to turn on, and is checked for `get-task-allow` only.
 - The numbers come from the symbol table itself, for the processor's build that has the most names. Apple's `nm` adds entries of its own for a stripped program (`<redacted function 1>` and so on), so to compare, run `nm --no-dyldinfo`.
 - Keep the debug information (`.dSYM`) before you strip, outside what ships. It is what makes crash reports readable.
+- A program built with Rust keeps the path of each source file in which it can stop on an error, as text that `strip` leaves alone. On any system, Reaproof lists them as a note: how many files are the program's own and how many are its dependencies', and whether a path names the home folder of the machine that built it. A program without Rust's standard library in it is not taken for a Rust one. `rustc --remap-path-prefix=<home folder>=~`, given in `RUSTFLAGS` or in `build.rustflags` of `.cargo/config.toml`, replaces that folder; the program's own file names cannot be left out with a stable Rust setting.
 - A Windows or Linux program is searched for keys, and for Electron's fuse list, which sits in Electron's own binary on every system.
 
 ## What the fixes change, measured
@@ -158,6 +242,8 @@ A macOS program: Swift 6.3, 44 types, built with `swiftc -O`.
 Stripping removed the names of functions and methods, and the program ran as before. It did not remove the names of types, properties and Objective-C methods: rea's own reader listed the same classes and instance variables before and after. Those are the names the note counts, and its counts for this program (44 Swift types, 42 Objective-C class names, 22 names of Swift properties and cases, 20 names of Objective-C methods and properties) match what `otool` shows in the same sections.
 
 Building with `-disable-reflection-names` took out the 22 names of Swift properties and enum cases, and changed what the program printed: an enum case came out as the name of its type.
+
+A Rust program, measured on 2026-10-15: rustc 1.98.1, three source files and one dependency taken from the Cargo registry folder, built with `strip = true`. One name was left in its symbol table, and the paths of its 3 source files and of 2 files of the dependency stayed as text, those 2 under the home folder of the machine that built it. Built again with `--remap-path-prefix=$HOME=~`, no path named the home folder, and the 3 file names stayed. Reaproof's note gave the same counts for both builds.
 
 Not measured: what rea reads with a disassembler behind it (Hopper, Ghidra or IDA), which is where the names in the symbol table would show as function names, and none of which was installed. And what the Hardened Runtime and `get-task-allow` change in practice: those two findings rest on Apple's documentation.
 
@@ -196,7 +282,9 @@ It runs one fixed release of rea, 6.4.0, the one this version was tested against
 ## Not covered yet
 
 - Disk images, installers and archives that are not ZIP (`.dmg`, `.pkg`, `.7z`, `.rar`, `.tar`, `.tar.gz` and the like). They are not opened. The report lists them as unread; point Reaproof at the app or folder inside. For a `.dmg` it says how to open one. A ZIP with something in front of it, as a self-extracting program or a `.crx` has, is not opened either.
-- Names and signatures of Windows and Linux programs. They are searched for keys and for Electron's fuses, nothing more.
+- Names and signatures of Windows and Linux programs. They are searched for keys, for Electron's fuses and for Rust's source paths, nothing more.
+- The screen code inside a Tauri app. The report names the program it sits in; point Reaproof at the build output in the project folder instead.
+- Source paths that programs built with Go, C or C++ keep as text. Rust's are the ones listed.
 - Server addresses and prompts inside a native program. Those two are looked for in JavaScript only.
 - Keys written in source map and CSS files. A map that embeds your sources is reported as critical by itself, but a key in those sources is not listed with it. A map embeds the sources of dependencies too, and their documentation carries example keys, so the two have to be told apart first.
 - Which certificate signed a macOS program. An ad-hoc or development signature is not told apart from a release one.
@@ -211,7 +299,7 @@ It runs one fixed release of rea, 6.4.0, the one this version was tested against
 npm test
 ```
 
-No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files and archives and run anywhere; each change is run on Linux, macOS and Windows with Node 18, 20, 22 and 24. Three more tests use the system's own tools where they are there. On a Mac with `clang` and `codesign`, two build, sign and strip throwaway programs, never start them, and check that Reaproof reads them the way `codesign` does and that `strip` takes out what was reported. Where `zip` is installed, one checks that an archive it wrote is read the same as the folder it was made from.
+No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files and archives and run anywhere; each change is run on Linux, macOS and Windows with Node 18, 20, 22 and 24. Four more tests use the system's own tools where they are there. On a Mac with `clang` and `codesign`, two build, sign and strip throwaway programs, never start them, and check that Reaproof reads them the way `codesign` does and that `strip` takes out what was reported. Where `zip` is installed, one checks that an archive it wrote is read the same as the folder it was made from. Where `cargo` is installed, one builds a small Rust program, never starts it, and checks that the paths of its own two source files are what the note counts.
 
 ## License
 

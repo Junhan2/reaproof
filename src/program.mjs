@@ -11,6 +11,8 @@ const ELF_PROGRAM_KINDS = [2, 3];
 // A Windows program opens with a DOS header that says, at this offset, where the real one starts.
 const DOS_HEADER_BYTES = 64;
 const PE_HEADER_POINTER = 0x3c;
+// A path a program keeps under someone's home folder names the account that built it.
+export const HOME_FOLDER = /^(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)/;
 
 /** @param {import('./bytes.mjs').ByteSource} source */
 export function isLinuxOrWindowsProgram(source) {

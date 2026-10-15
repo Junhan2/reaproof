@@ -5,10 +5,14 @@ import { main } from '../src/cli.mjs';
 
 // Questions are asked only when a person is at both ends of the terminal.
 const isAttended = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+// Color only where a person sees the output, by Node's own reading of the terminal: NO_COLOR,
+// FORCE_COLOR, NODE_DISABLE_COLORS and TERM=dumb all count.
+const takesColor = Boolean(process.stdout.isTTY && process.stdout.hasColors());
 
 process.exitCode = await main(process.argv.slice(2), {
   print: (text) => console.log(text),
   printError: (text) => console.error(text),
+  color: takesColor,
   ask: isAttended ? askYesOrNo : null,
   runBuild: ([program, ...args], directory) =>
     spawnSync(program, args, { cwd: directory, stdio: 'inherit', shell: process.platform === 'win32' }).status === 0,

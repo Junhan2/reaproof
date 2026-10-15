@@ -1,11 +1,33 @@
+import { inspect } from 'node:util';
 import { isFixable } from './fix.mjs';
-import { groupByRule, LEAK_SEVERITIES, SOURCE_MAP_RULES, STANDALONE_MAP_RULES, worstSeverity } from './rules.mjs';
+import {
+  groupByRule,
+  hasLeakAtOrAbove,
+  LEAK_SEVERITIES,
+  RISK_LEVELS,
+  SOURCE_MAP_RULES,
+  STANDALONE_MAP_RULES,
+  worstSeverity,
+} from './rules.mjs';
 import { countLeftUnread, toDisplayPath } from './scan.mjs';
 
 const MAX_LISTED_PATHS = 5;
 const MAX_LISTED_ADDRESSES = 10;
 const INDENT = '  ';
 const FIX_COMMAND = 'reaproof fix --yes';
+// How two ratings and the levels of the scale are set apart in a line. The lines are written
+// and painted by these same strings.
+const RISK_ARROW = ' → ';
+const LEVEL_SEPARATOR = ' · ';
+// Projects that make an app to install, whose output is no website to check at an address.
+const APP_FRAMEWORKS = ['electron', 'tauri'];
+// The numbers of one file a rule's explanation speaks of: the file with the most of them.
+const FULLEST_COUNTS = ['names', 'types', 'members', 'ownFiles', 'dependencyFiles'];
+// Terminal styles by the names Node's own `util.inspect.colors` gives them.
+const SEVERITY_STYLES = { critical: ['red', 'bold'], high: ['red'], medium: ['yellow'], info: ['cyan'] };
+const RISK_COLORS = { 'very-high': 'red', high: 'red', moderate: 'yellow', baseline: 'green', unrated: 'magenta' };
+const styled = (text, styles) =>
+  styles.reduce((inner, name) => `\x1b[${inspect.colors[name][0]}m${inner}\x1b[${inspect.colors[name][1]}m`, text);
 
 const KO = {
   severity: { critical: '심각', high: '높음', medium: '보통', info: '안내' },
@@ -34,6 +56,7 @@ const KO = {
       '이 도구가 찾는 누수는 나오지 않았습니다. 그래도 코드의 구조, 그 안의 글과 값, 서버 주소는 읽힙니다. 어떤 앱이든 지는 위험입니다.',
     unrated: '출시물의 본체를 읽지 못해 판정하지 않았습니다. 새는 곳이 없다는 뜻이 아닙니다.',
   },
+  levelsLabel: '단계',
   andMore: (count) => `외 ${count}개`,
   originals: (names) => `원본: ${names}`,
   notSigned: '서명 없음',
@@ -41,6 +64,8 @@ const KO = {
   sourcesIn: (count, sample) => `원본 경로 ${count}개, 예: ${sample}`,
   typesIn: (architecture, count) => `${architecture}: 타입 이름 ${count}개`,
   membersIn: (count) => `속성·메서드 이름 ${count}개`,
+  ownFilesIn: (count) => `앱 자신의 파일 ${count}개`,
+  dependencyFilesIn: (count) => `의존 라이브러리 ${count}개`,
   forExample: (sample) => `예: ${sample}`,
   // Listed roughly from most to least damaging: a report shows the rules in this order.
   rules: {
@@ -156,6 +181,18 @@ const KO = {
           : []),
       ],
     },
+    'source-paths': {
+      title: '실행 파일에 원본 파일의 경로가 글자로 남아 있습니다',
+      body: ({ files, ownFiles, dependencyFiles, builders }) => [
+        `Rust 로 만든 실행 파일 ${files}개에 원본 파일의 경로가 글자로 남아 있습니다. 가장 많은 파일에는 앱 자신의 파일 ${ownFiles}개와 의존 라이브러리의 파일 ${dependencyFiles}개의 경로가 있습니다. 오류가 난 곳을 알리려고 Rust 가 넣는 글이라 strip 으로는 떼어지지 않고, 파일 이름만 보고도 코드가 어떻게 나뉘어 있는지 읽힙니다.`,
+        ...(builders > 0
+          ? [
+              '빌드한 컴퓨터의 홈 폴더 경로도 들어 있어 계정 이름이 보입니다. 빌드할 때 rustc 에 --remap-path-prefix=<홈 폴더>=~ 를 주면 그 부분이 ~ 로 바뀝니다(환경변수 RUSTFLAGS, 또는 .cargo/config.toml 의 build.rustflags).',
+            ]
+          : []),
+        '앱 자신의 파일 이름은 정식 Rust 설정으로는 뺄 수 없습니다. 숨겨야 할 로직은 서버로 옮기세요.',
+      ],
+    },
     'developer-file': {
       title: '개발하는 사람이 보려고 쓴 문서와 스크립트가 함께 들어 있습니다',
       body: ({ files }) => [
@@ -225,6 +262,8 @@ const KO = {
     `열지 못한 꾸러미 ${count}개(${names}): 이 종류는 안을 읽지 못합니다. 안에 든 앱이나 폴더를 꺼내 직접 가리켜 주세요.`,
   nestedTooDeep: (count, names) =>
     `너무 깊이 겹쳐 열지 않은 꾸러미 ${count}개(${names}): 꾸러미 속 꾸러미는 세 겹까지 엽니다. 안의 꾸러미를 꺼내 직접 가리켜 주세요.`,
+  unreadScreenCode: (count, names) =>
+    `Tauri 로 만든 실행 파일 ${count}개(${names}) 안의 화면 코드(HTML, JavaScript)는 읽지 않았습니다. 프로젝트 폴더에서 npx reaproof 를 돌리면 빌드 결과 폴더(dist 등)에서 그 코드를 점검합니다.`,
   diskImageHint: 'DMG 는 hdiutil attach -readonly -nobrowse <파일> 로 연 뒤, /Volumes 아래에 나타난 앱을 가리키면 됩니다.',
   textless: (count) => `그림, 소리, 영상, 글꼴, 압축 파일처럼 읽어도 찾을 것이 없는 ${count}개는 읽지 않았습니다.`,
   errors: {
@@ -250,6 +289,17 @@ const KO = {
     ENOTFOUND: '그 이름의 사이트를 찾지 못했습니다',
     ECONNREFUSED: '서버가 연결을 받지 않았습니다',
     ECONNRESET: '연결이 도중에 끊겼습니다. 아직 배포 전이거나 보안 인증서가 준비되지 않은 사이트에서 흔합니다',
+  },
+  starting: '점검하는 중입니다. 읽기만 하고 아무것도 바꾸지 않습니다.',
+  nextTitle: '다음에 할 일:',
+  next: {
+    unread: '위에 적힌 읽지 않은 것을 안내대로 점검하세요. 그 전에는 이 결과가 출시물 전부를 다룬 것이 아닙니다.',
+    redeploy: '빌드 설정에서 지도 파일을 끄고 다시 배포한 뒤, 이 주소로 다시 확인하세요.',
+    fixFromTop: '위 항목을 위에서부터 고치세요. 더 위험한 것이 먼저 나옵니다.',
+    rerun: '고친 뒤 다시 빌드하고 npx reaproof 를 다시 실행하세요. 항목이 사라지면 된 것입니다.',
+    everyBuild:
+      '출시할 때마다 빌드한 뒤 npx reaproof 를 돌리세요. 심각하거나 높은 누수가 생기면 종료 코드 1 로 끝나 출시를 멈출 수 있습니다.',
+    checkDeployed: '배포한 뒤에는 npx reaproof https://내-사이트 로 배포본도 확인하세요.',
   },
   fixPlanTitle: (count) => `지도 파일 ${count}개를 배포물에서 뺍니다:`,
   buildQuestion: (command) => `빌드 결과물이 없습니다. 지금 빌드할까요? (${command}) (y/N) `,
@@ -339,6 +389,7 @@ const EN = {
       'None of the leaks this tool looks for was found. Code structure, the text and values in it, and server addresses are still readable, as in any shipped app.',
     unrated: 'What ships could not be read, so no rating is given. That does not mean nothing leaks.',
   },
+  levelsLabel: 'Levels',
   andMore: (count) => `and ${count} more`,
   originals: (names) => `originals: ${names}`,
   notSigned: 'not signed',
@@ -346,6 +397,8 @@ const EN = {
   sourcesIn: (count, sample) => `${count} original path(s), for example ${sample}`,
   typesIn: (architecture, count) => `${architecture}: ${count} type names`,
   membersIn: (count) => `${count} names of properties and methods`,
+  ownFilesIn: (count) => `${count} file(s) of its own`,
+  dependencyFilesIn: (count) => `${count} of dependencies`,
   forExample: (sample) => `for example ${sample}`,
   // In the same order as the Korean table, which sets the order a report shows them in.
   rules: {
@@ -465,6 +518,18 @@ const EN = {
           : []),
       ],
     },
+    'source-paths': {
+      title: 'Paths of the source files stay in the program as text',
+      body: ({ files, ownFiles, dependencyFiles, builders }) => [
+        `${files} program file(s) built with Rust hold the paths of their source files as text. The one with the most holds the paths of ${ownFiles} file(s) of its own and ${dependencyFiles} of its dependencies. Rust puts them in so that an error can say where it happened, so strip does not take them out, and the file names alone show how the code is divided up.`,
+        ...(builders > 0
+          ? [
+              'They include the home folder of the machine that built it, which shows the account name. Give rustc --remap-path-prefix=<home folder>=~ when you build, and that part becomes ~ (in the RUSTFLAGS environment variable, or build.rustflags in .cargo/config.toml).',
+            ]
+          : []),
+        'The names of the app’s own files cannot be left out with a stable Rust setting. Move logic that must stay private to a server.',
+      ],
+    },
     'developer-file': {
       title: 'Notes and scripts written for developers are included',
       body: ({ files }) => [
@@ -535,6 +600,8 @@ const EN = {
     `Containers that could not be opened: ${count} (${names}). This scanner does not read inside this kind. Take out the app or folder inside and point at that.`,
   nestedTooDeep: (count, names) =>
     `Archives nested too deep to open: ${count} (${names}). Archives inside archives are opened three deep. Take out the one inside and point at it.`,
+  unreadScreenCode: (count, names) =>
+    `The screen code (HTML, JavaScript) inside ${count} Tauri program(s) (${names}) was not read. Run npx reaproof in the project folder to check that code in the build output folder (dist and the like).`,
   diskImageHint: 'For a DMG, open it with hdiutil attach -readonly -nobrowse <file> and point at the app that appears under /Volumes.',
   textless: (count) =>
     `Not read: ${count} file(s) such as pictures, sound, video, fonts and compressed files, in which there is nothing to find.`,
@@ -561,6 +628,17 @@ const EN = {
     ENOTFOUND: 'no site with that name was found',
     ECONNREFUSED: 'the server did not accept the connection',
     ECONNRESET: 'the connection was cut off, as often happens with a site that is not deployed yet or whose certificate is not ready',
+  },
+  starting: 'Checking. This only reads; nothing is changed.',
+  nextTitle: 'What to do next:',
+  next: {
+    unread: 'Check what was not read, as said above. Until then this result does not cover all of what ships.',
+    redeploy: 'Turn source maps off in the build settings, deploy again, and check this address again.',
+    fixFromTop: 'Fix the findings above from the top: the most damaging come first.',
+    rerun: 'Then rebuild and run npx reaproof again. A finding that is gone is fixed.',
+    everyBuild:
+      'Run npx reaproof after every build before you ship. It exits with 1 when a critical or high leak appears, which can stop a release.',
+    checkDeployed: 'After deploying, check the live site too: npx reaproof https://your-site',
   },
   fixPlanTitle: (count) => `${count} map file(s) will be taken out of the output:`,
   buildQuestion: (command) => `There is no build output. Build now? (${command}) (y/N) `,
@@ -645,6 +723,11 @@ export function createReporter(language) {
   const capWith = (items, limit, toLast) =>
     items.length <= limit ? items : [...items.slice(0, limit), toLast(items.length - limit)];
   const capList = (lines, limit) => capWith(lines, limit, (count) => `- ${t.andMore(count)}`);
+  const withSample = (fact, sample) => (sample ? `${fact}, ${t.forExample(sample)}` : fact);
+  // How the lines that are painted at a terminal open. Each is written by these, and found by them.
+  const tagOf = (severity) => `[${t.severity[severity]}]`;
+  const riskOpening = `${t.riskLabel}: `;
+  const levelsOpening = `${INDENT}${t.levelsLabel}: `;
 
   /** "none", or "2 kinds (critical 1, medium 1)": never a score that could read as "safe". */
   function describeLeaks(leaks) {
@@ -672,8 +755,10 @@ export function createReporter(language) {
       if (detail.sourceCount > 0) facts.push(t.sourcesIn(detail.sourceCount, detail.sampleSources[0]));
       return `- ${path} (${facts.join(', ')})`;
     }
+    if (rule === 'source-paths') {
+      return `- ${path} (${withSample(t.ownFilesIn(detail.ownFiles), detail.sample)} · ${t.dependencyFilesIn(detail.dependencyFiles)})`;
+    }
     if (rule === 'kept-names') {
-      const withSample = (fact, sample) => (sample ? `${fact}, ${t.forExample(sample)}` : fact);
       const facts = [
         withSample(t.typesIn(detail.architecture, detail.types), detail.sampleType),
         withSample(t.membersIn(detail.members), detail.sampleMember),
@@ -691,15 +776,13 @@ export function createReporter(language) {
     const sumOf = (field) => findings.reduce((sum, { detail }) => sum + (detail[field] ?? 0), 0);
     // A program met in a folder and again in an archive of it would count twice in a sum, so
     // what is said is the count of one file: the one with the most, both numbers from it.
-    const namesOf = ({ detail }) => (detail.names ?? 0) + (detail.types ?? 0) + (detail.members ?? 0);
+    const namesOf = ({ detail }) => FULLEST_COUNTS.reduce((sum, field) => sum + (detail[field] ?? 0), 0);
     const fullest = findings.reduce((most, finding) => (namesOf(finding) > namesOf(most) ? finding : most), findings[0]);
     const totals = {
       files: findings.length,
       embedded: sumOf('embeddedCount'),
       sources: sumOf('sourceCount'),
-      names: fullest?.detail.names ?? 0,
-      types: fullest?.detail.types ?? 0,
-      members: fullest?.detail.members ?? 0,
+      ...Object.fromEntries(FULLEST_COUNTS.map((field) => [field, fullest?.detail[field] ?? 0])),
       fieldNames: sumOf('swiftFieldNames'),
       builders: findings.filter(({ detail }) => detail.namesBuilder).length,
       debugSymbols: findings.filter(({ detail }) => detail.kind === 'debug-symbols').length,
@@ -717,6 +800,9 @@ export function createReporter(language) {
       if (result.unopenedContainers.some((name) => /\.dmg$/i.test(name))) unread.push(t.diskImageHint);
     }
     if (result.nestedTooDeep.length > 0) unread.push(t.nestedTooDeep(result.nestedTooDeep.length, named(result.nestedTooDeep)));
+    if (result.unreadScreenCode.length > 0) {
+      unread.push(t.unreadScreenCode(result.unreadScreenCode.length, named(result.unreadScreenCode)));
+    }
     if (result.unreadableArchives.length > 0) {
       unread.push(t.unreadableArchives(result.unreadableArchives.length, named(result.unreadableArchives)));
     }
@@ -758,7 +844,7 @@ export function createReporter(language) {
         ? capList(addresses.map((address) => `- ${address}`), MAX_LISTED_ADDRESSES)
         : capList(findings.map(describeFinding), MAX_LISTED_PATHS);
     const lines = [
-      `[${t.severity[worstSeverity(findings)]}] ${t.rules[rule].title}`,
+      `${tagOf(worstSeverity(findings))} ${t.rules[rule].title}`,
       ...indent(t.rules[rule].body(totals)),
       ...indent(listed),
     ];
@@ -778,6 +864,62 @@ export function createReporter(language) {
     ];
   }
 
+  /** Every level, with the result's own in brackets, so that a first reading shows where it stands. */
+  function levelsLine(risk) {
+    const levels = RISK_LEVELS.map((level) => (level === risk ? `[${t.riskLevels[level]}]` : t.riskLevels[level]));
+    return levelsOpening + levels.join(LEVEL_SEPARATOR);
+  }
+
+  /**
+   * The way on from a result, for someone who has not run this before. What was met and not
+   * read comes first: until it is checked, the result does not cover it. A site is checked for
+   * its maps alone, and anything else on it is said by the line about what that check covers.
+   */
+  function nextSteps(result) {
+    const leftUnread =
+      result.risk === 'unrated' ||
+      [result.unopenedContainers, result.nestedTooDeep, result.unreadScreenCode].some((paths) => paths.length > 0);
+    const steps = leftUnread && !result.isDeployed ? [t.next.unread] : [];
+    if (result.risk === 'unrated') return steps;
+    const hasLeaks = hasLeakAtOrAbove(result.leaks, 'medium');
+    if (result.isDeployed) return hasLeaks ? [t.next.redeploy] : [];
+    steps.push(...(hasLeaks ? [t.next.fixFromTop, t.next.rerun] : [t.next.everyBuild]));
+    // JavaScript read with no program or archive around it, from no project that makes an
+    // app to install, is a website's output.
+    const isWebsite =
+      !result.frameworks.some((framework) => APP_FRAMEWORKS.includes(framework)) &&
+      result.scriptsScanned > 0 &&
+      result.programsScanned === 0 &&
+      result.archivesOpened === 0;
+    if (isWebsite) steps.push(t.next.checkDeployed);
+    return steps;
+  }
+
+  // What a report line opens with says how it is painted at a terminal. Only lines this
+  // reporter writes open so: text copied from a scanned file never starts a line.
+  const tagStyles = Object.keys(t.severity).map((severity) => [`${tagOf(severity)} `, SEVERITY_STYLES[severity]]);
+  const riskStylesByLabel = new Map(
+    Object.entries(t.riskLevels).map(([risk, label]) => [label, [RISK_COLORS[risk], 'bold']]),
+  );
+  const stylesOfRisk = (label) => riskStylesByLabel.get(label) ?? [];
+
+  function paintLine(line) {
+    const tag = tagStyles.find(([opening]) => line.startsWith(opening));
+    if (tag) return `${styled(tag[0].trimEnd(), tag[1])} ${styled(line.slice(tag[0].length), ['bold'])}`;
+    if (line.startsWith(riskOpening)) {
+      const labels = line.slice(riskOpening.length).split(RISK_ARROW);
+      return riskOpening + labels.map((label) => styled(label, stylesOfRisk(label))).join(RISK_ARROW);
+    }
+    if (line.startsWith(levelsOpening)) {
+      const levels = line.slice(levelsOpening.length).split(LEVEL_SEPARATOR);
+      const painted = levels.map((level) =>
+        level.startsWith('[') ? styled(level, stylesOfRisk(level.slice(1, -1))) : styled(level, ['dim']),
+      );
+      return levelsOpening + painted.join(LEVEL_SEPARATOR);
+    }
+    return line === t.nextTitle ? styled(line, ['bold']) : line;
+  }
+
   return {
     buildQuestion: t.buildQuestion,
     confirmQuestion: t.confirmQuestion,
@@ -789,7 +931,13 @@ export function createReporter(language) {
     measureQuestion: t.measureQuestion,
     measureNeedsApproval: t.measureNeedsApproval,
     measureNotice: t.measureNotice,
+    starting: t.starting,
     help: t.help.join('\n'),
+
+    /** Text this reporter wrote, with color for a terminal that shows it. */
+    paint(text) {
+      return text.split('\n').map(paintLine).join('\n');
+    },
 
     scan(result) {
       const isDeployed = Boolean(result.isDeployed);
@@ -807,7 +955,8 @@ export function createReporter(language) {
         asides.length > 0 ? `${scanned} (${asides.join(', ')})` : scanned,
         ...indent(listUnread(result)),
         '',
-        `${t.riskLabel}: ${t.riskLevels[result.risk]}`,
+        riskOpening + t.riskLevels[result.risk],
+        ...(result.risk === 'unrated' ? [] : [levelsLine(result.risk)]),
         INDENT + t.riskSummaries[result.risk],
       ];
       // With nothing read, "none found" would read as "clean".
@@ -822,9 +971,11 @@ export function createReporter(language) {
         lines.push(...nextBuildHints(result.frameworks), '');
       }
       const limits = listLimits(result);
-      if (limits.length > 0) lines.push(`[${t.severity.info}] ${t.limitsTitle}`, ...indent(limits), '');
+      if (limits.length > 0) lines.push(`${tagOf('info')} ${t.limitsTitle}`, ...indent(limits), '');
       if (isDeployed) lines.push(t.deployedScope);
-      return lines.join('\n').trimEnd();
+      const report = lines.join('\n').trimEnd();
+      const steps = nextSteps(result).map((step, index) => `${index + 1}. ${step}`);
+      return steps.length > 0 ? [report, '', t.nextTitle, ...indent(steps)].join('\n') : report;
     },
 
     fixPlan(root, mapPaths) {
@@ -835,7 +986,7 @@ export function createReporter(language) {
     fixDone(before, after, applied) {
       return [
         t.fixDone(applied.movedCount),
-        `${t.riskLabel}: ${t.riskLevels[before.risk]} → ${t.riskLevels[after.risk]}`,
+        riskOpening + t.riskLevels[before.risk] + RISK_ARROW + t.riskLevels[after.risk],
         `${t.leaksLabel}: ${describeLeaks(before.leaks)} → ${describeLeaks(after.leaks)}`,
         ...listUnread(after),
         t.backupAt(applied.backupDir),
