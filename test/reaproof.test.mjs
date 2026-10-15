@@ -11,6 +11,7 @@ import { main } from '../src/cli.mjs';
 import { applyFix, planFix, undoLastFix } from '../src/fix.mjs';
 import { toWindowsShellArgument } from '../src/measure.mjs';
 import { scanDeployedSite } from '../src/remote.mjs';
+import { collectRustSourcePaths, startRustSourcePaths } from '../src/rust.mjs';
 import { CHUNK_BYTES, FILE_COST_BYTES, MAX_UNPACKED_BYTES, OVERLAP_BYTES, scan, ScanError, withoutFiles } from '../src/scan.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../bin/reaproof.mjs', import.meta.url));
@@ -2140,7 +2141,10 @@ test('a program built by the real Rust tools is noted for its own source files a
   // Built and stripped here, and never started.
   const program = join(root, 'target', 'release', process.platform === 'win32' ? 'probe.exe' : 'probe');
   const { sample, ...counts } = scan(program).findings.find(({ rule }) => rule === 'source-paths').detail;
-  assert.deepEqual(counts, { ownFiles: 2, dependencyFiles: 0, namesBuilder: false });
+  // Should the count be off, the paths read say why: each system's tools write them their own way.
+  const found = startRustSourcePaths();
+  collectRustSourcePaths(readFileSync(program), false, found);
+  assert.deepEqual(counts, { ownFiles: 2, dependencyFiles: 0, namesBuilder: false }, JSON.stringify([...found.paths]));
   assert.match(sample, /^src[\\/](?:main|billing)\.rs$/);
 });
 
