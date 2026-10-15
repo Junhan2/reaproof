@@ -11,6 +11,8 @@ import { readMachO } from './macho.mjs';
 import { checkMachO } from './macos.mjs';
 import { isLinuxOrWindowsProgram } from './program.mjs';
 import { archiveFinding, checkFile, checkPath, hasContentChecks, isScript, summarizeFindings } from './rules.mjs';
+import { checkRustSourcePaths, collectRustSourcePaths, startRustSourcePaths } from './rust.mjs';
+import { holdsTauriScreenCode } from './tauri.mjs';
 import { toShown, toShownText } from './text.mjs';
 import { isZip, openZip } from './zip.mjs';
 
@@ -44,7 +46,14 @@ export const CHUNK_BYTES = 896 * 1024;
 export const OVERLAP_BYTES = 64 * 1024;
 // One file full of key-shaped bytes is noise or an attack, not that many keys.
 const MAX_FINDINGS_IN_BYTES = 200;
-const FRAMEWORK_BY_PACKAGE = { next: 'next', vite: 'vite', 'react-scripts': 'cra', electron: 'electron' };
+const FRAMEWORK_BY_PACKAGE = {
+  next: 'next',
+  vite: 'vite',
+  'react-scripts': 'cra',
+  electron: 'electron',
+  '@tauri-apps/cli': 'tauri',
+  '@tauri-apps/api': 'tauri',
+};
 const PACKAGE_MANAGER_BY_LOCKFILE = [
   ['pnpm-lock.yaml', 'pnpm'],
   ['yarn.lock', 'yarn'],
@@ -112,7 +121,8 @@ export function toDisplayPath(root, path) {
  * was opened is one file read, and so is each file in it; `archivesOpened` says how many
  * of the files read were such archives. `scriptsScanned` and `programsScanned` say how many
  * were JavaScript and native programs. The lists name what could not be read for a reason
- * worth telling.
+ * worth telling. `unreadScreenCode` names programs that were read and carry a screen inside
+ * them that was not: a Tauri app's HTML and JavaScript.
  *
  * @param {{ root: string, targets: string[], targetsPickedByName: boolean, frameworks: string[] }} subject what was looked at
  */
@@ -130,6 +140,7 @@ export function startResult(subject) {
     unreadableArchives: [],
     unopenedContainers: [],
     nestedTooDeep: [],
+    unreadScreenCode: [],
   };
 }
 
@@ -376,14 +387,14 @@ function decodeText(bytes) {
  * A file whose name does not say it is code is searched for keys a chunk at a time: a
  * program, bytecode, a data file, a script, a note. A native program has no file name to go
  * by and is known by how it opens. A Mach-O is also read for what it says about its own
- * names and signature, and Electron's binary for its fuses.
+ * names and signature, and Electron's binary for its fuses. Any program is read for the
+ * paths of the Rust source it was built from, and for a Tauri app's screen inside it.
  */
 function scanBytes({ displayPath, diskPath, source }, state) {
   const images = readMachO(source);
   // An object file is a step of a build, not a program anyone runs.
-  if (images?.some(({ kind }) => kind !== 'other') || isLinuxOrWindowsProgram(source)) {
-    state.result.programsScanned += 1;
-  }
+  const isProgram = images?.some(({ kind }) => kind !== 'other') || isLinuxOrWindowsProgram(source);
+  if (isProgram) state.result.programsScanned += 1;
 
   if (images) addFindings(state, checkMachO(displayPath, images), diskPath);
   // The same thing sits in each architecture's build and where two chunks overlap, and is
@@ -397,23 +408,34 @@ function scanBytes({ displayPath, diskPath, source }, state) {
   // program can go a whole chunk without a zero byte, and is no more text there.
   const isText = !holdsZeroByte(source);
   const findKeys = isText ? checkSecrets : checkSecretsInBytes;
+  const sourcePaths = startRustSourcePaths();
+  let holdsScreenCode = false;
   for (const chunk of readChunks(source, CHUNK_BYTES, OVERLAP_BYTES)) {
     const place = {
       hasMoreBefore: chunk.position > 0,
       hasMoreAfter: chunk.position + chunk.bytes.length < source.byteLength,
     };
+    if (isProgram) {
+      collectRustSourcePaths(chunk.bytes, place.hasMoreBefore, sourcePaths);
+      holdsScreenCode ||= holdsTauriScreenCode(chunk.bytes);
+    }
     const inThisChunk = [checkElectronFuses(displayPath, source, chunk)];
-    for (const text of readAsText(chunk.bytes, isText)) {
-      // What a finding quotes is a view into the text, and kept as it is would keep the
-      // whole chunk in memory until the file is done. Findings leave here as copies.
-      const found = findKeys(displayPath, text, place, seenKeys);
-      if (found.length > 0) keys.push(...structuredClone(found));
-      inThisChunk.push(checkEnvValues(displayPath, text, state.envSecrets));
+    // The search for keys stops at its limit; the rest goes on to the end of the file.
+    const wantsKeys = keys.length < MAX_FINDINGS_IN_BYTES;
+    if (wantsKeys || state.envSecrets.length > 0) {
+      for (const text of readAsText(chunk.bytes, isText)) {
+        // What a finding quotes is a view into the text, and kept as it is would keep the
+        // whole chunk in memory until the file is done. Findings leave here as copies.
+        const found = wantsKeys ? findKeys(displayPath, text, place, seenKeys) : [];
+        if (found.length > 0) keys.push(...structuredClone(found));
+        inThisChunk.push(checkEnvValues(displayPath, text, state.envSecrets));
+      }
     }
     for (const finding of inThisChunk.flat()) others.set(JSON.stringify(finding), finding);
-    if (keys.length >= MAX_FINDINGS_IN_BYTES) break;
   }
-  addFindings(state, [...keys.slice(0, MAX_FINDINGS_IN_BYTES), ...others.values()], diskPath);
+  if (holdsScreenCode) state.result.unreadScreenCode.push(displayPath);
+  const notes = checkRustSourcePaths(displayPath, sourcePaths);
+  addFindings(state, [...keys.slice(0, MAX_FINDINGS_IN_BYTES), ...others.values(), ...notes], diskPath);
 }
 
 function holdsZeroByte(source) {
@@ -426,7 +448,8 @@ function holdsZeroByte(source) {
 /**
  * Bytes as the text they may hold: one byte to a character and, unless they are text to
  * begin with, two bytes to a character starting on either byte, which is how Windows
- * programs, .NET and Hermes keep some of theirs.
+ * programs, .NET and Hermes keep some of theirs. Each is made only when the one before is
+ * done with, so no more than one is held at a time.
  */
 function* readAsText(bytes, isText) {
   yield bytes.toString('latin1');
@@ -491,9 +514,10 @@ function findBuildCommand(root) {
 function detectFrameworks(root) {
   const manifest = readManifest(root);
   const installed = { ...manifest?.dependencies, ...manifest?.devDependencies };
-  return Object.entries(FRAMEWORK_BY_PACKAGE)
+  const frameworks = Object.entries(FRAMEWORK_BY_PACKAGE)
     .filter(([packageName]) => packageName in installed)
     .map(([, framework]) => framework);
+  return [...new Set(frameworks)];
 }
 
 /** @returns {Record<string, any> | null} null when there is no package.json here or it does not parse */

@@ -1,3 +1,4 @@
+import { HOME_FOLDER } from './program.mjs';
 import { worstSeverity } from './rules.mjs';
 
 // What a Mach-O file, the format of macOS and iOS programs, gives away or leaves open. The
@@ -7,7 +8,6 @@ import { worstSeverity } from './rules.mjs';
 // A stripped build keeps a marker or two. A handful of names says little about the code,
 // so names alone are reported from a hundred up.
 const MIN_NAMES = 100;
-const HOME_FOLDER = /^(?:\/Users\/|\/home\/|[A-Za-z]:\\Users\\)/;
 // A path is long, and one is enough to show whose machine it names.
 const MAX_SAMPLE_SOURCES = 1;
 
@@ -80,7 +80,6 @@ function checkNames(path, images) {
     debugEntries,
     sourceCount: sources.length,
     sampleSources: sources.slice(0, MAX_SAMPLE_SOURCES),
-    // A path under someone's home folder names the account that built the file.
     namesBuilder: sources.some((source) => HOME_FOLDER.test(source)),
   };
   return [{ rule: 'native-symbols', severity: 'medium', path, detail }];

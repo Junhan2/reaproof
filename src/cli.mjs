@@ -35,6 +35,7 @@ const EXIT_UNREAD = 3;
  * @property {(text: string) => void} printError
  * @property {((question: string) => Promise<boolean>) | null} ask null when nobody is there to answer
  * @property {(command: string[], directory: string) => boolean} runBuild true when the build succeeded
+ * @property {boolean} [color] whether what is printed is shown in a terminal that takes color
  */
 
 /**
@@ -44,9 +45,11 @@ const EXIT_UNREAD = 3;
  */
 export async function main(argv, outside) {
   // Whatever a path, a message or another program's output carries, nothing unseen gets out.
+  // Color goes on after that, so nothing a scanned file holds can color a terminal.
+  let paint = (text) => text;
   const terminal = {
     ...outside,
-    print: (text) => outside.print(toPrintable(text)),
+    print: (text) => outside.print(paint(toPrintable(text))),
     printError: (text) => outside.printError(toPrintable(text)),
   };
   let parsed;
@@ -66,6 +69,7 @@ export async function main(argv, outside) {
   const { values, positionals } = parsed;
   const options = { ...values, failOn: values['fail-on'] ?? 'high' };
   const report = createReporter(pickLanguage(options.lang));
+  if (outside.color && !options.json) paint = report.paint;
   if (!LEAK_SEVERITIES.includes(options.failOn)) {
     return fail(terminal, report, options.json, EXIT_USAGE, { code: 'usage', message: report.failOnError(options.failOn) });
   }
@@ -117,6 +121,8 @@ function fail(terminal, report, wantsJson, exitCode, failure) {
  */
 async function runScan(target, options, report, terminal) {
   const ask = options.json ? null : terminal.ask;
+  // A person at a terminal is told what is happening, and that it changes nothing, before it starts.
+  if (ask) terminal.print(report.starting);
   const result = isWebAddress(target)
     ? await scanDeployedSite(target)
     : await scanOrOfferBuild(resolve(target), ask, report, terminal);

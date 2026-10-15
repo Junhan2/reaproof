@@ -18,6 +18,8 @@ const SECRET_SCAN_EXTENSIONS = new Set([...SCRIPT_EXTENSIONS, '.html', '.json', 
 export const LEAK_SEVERITIES = ['critical', 'high', 'medium'];
 const SEVERITIES_ASCENDING = ['info', ...[...LEAK_SEVERITIES].reverse()];
 const RISK_BY_WORST_SEVERITY = { critical: 'very-high', high: 'high', medium: 'moderate', info: 'baseline' };
+// The levels a rating can have, worst first. "Not rated" is not one of them.
+export const RISK_LEVELS = Object.values(RISK_BY_WORST_SEVERITY);
 
 /** Tells the scanner which files are read whole, for every check; the rest are searched for keys only. */
 export function hasContentChecks(extension) {

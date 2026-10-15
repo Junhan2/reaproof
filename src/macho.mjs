@@ -46,6 +46,11 @@ const NAME = /^[A-Za-z_$.][\w$.:]*$/;
 // Swift classes are named in the Objective-C list too, in mangled form: `_Tt`, letters for
 // the kind, then each part of the name led by its length, as in `_TtC4Shop11OrderClient`.
 const SWIFT_MANGLED_CLASS = /^_Tt[A-Z]+((?:\d+[^\d].*)?)$/;
+// A name as code spells it, the kind shown as an example. A longer one is not shown, and in a
+// list of Swift names that cannot be spelled so, this many are tried before giving up.
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_SAMPLE_NAME_LENGTH = 128;
+const MAX_SWIFT_NAMES_TRIED = 64;
 // A stored property or enum case as Swift code spells one. The same list holds the names of
 // associated types such as `RawValue`, which come from the standard library, and names that
 // macros make, which start with `_` or `$`: neither is a good example of the program's own.
@@ -331,7 +336,7 @@ function readKeptNames(read, sections) {
     objcMethodNames: methodNames.length,
     // A Swift class is named after the program's own module. Any other name in the list may
     // be that of a protocol the program adopts from a system framework.
-    sampleType: classNames.length > 0 ? copied(plainClassName(classNames.find(isSwiftClass) ?? classNames[0])) : null,
+    sampleType: copied(sampleClassName(classNames)),
     // Of the program's own names, the longest of the first few says the most. Method names
     // are not taken: the list holds those of the system methods the program calls as well.
     sampleMember: copied(
@@ -355,18 +360,60 @@ function copied(name) {
   return name === null ? null : Buffer.from(name, 'latin1').toString('latin1');
 }
 
-/** @returns {string} `OrderClient` for `_TtC4Shop11OrderClient`; any other name as it is */
-function plainClassName(name) {
-  let rest = SWIFT_MANGLED_CLASS.exec(name)?.[1];
-  let last = name;
+/**
+ * A class name to show as an example, as its code spells it. A Swift class comes first: it
+ * is named after the program's own module. A name that cannot be spelled so is passed over,
+ * and a list of nothing else is not gone through to its end.
+ *
+ * @returns {string | null}
+ */
+function sampleClassName(classNames) {
+  let firstOther = null;
+  let swiftTried = 0;
+  for (const name of classNames) {
+    if (!isSwiftClass(name)) {
+      if (firstOther === null && isReadableName(name)) firstOther = name;
+      continue;
+    }
+    const plain = plainClassName(name);
+    if (isReadableName(plain)) return plain;
+    if (++swiftTried === MAX_SWIFT_NAMES_TRIED) break;
+  }
+  return firstOther;
+}
+
+function isReadableName(name) {
+  return name !== null && name.length <= MAX_SAMPLE_NAME_LENGTH && IDENTIFIER.test(name);
+}
+
+/**
+ * @returns {string | null} `OrderClient` for `_TtC4Shop11OrderClient`, and the class's own name
+ *   for one declared inside a function; null for another mangled name
+ */
+function plainClassName(swiftName) {
+  let rest = SWIFT_MANGLED_CLASS.exec(swiftName)[1];
+  let last = null;
   while (rest) {
     const length = Number.parseInt(rest, 10);
     const start = String(length).length;
-    if (!Number.isInteger(length) || length === 0 || start + length > rest.length) return name;
+    // A class declared inside a function is named after the function and its type first,
+    // and by its own name last.
+    if (!Number.isInteger(length) || length === 0 || start + length > rest.length) return nameAtEnd(rest);
     last = rest.slice(start, start + length);
     rest = rest.slice(start + length);
   }
   return last;
+}
+
+/** The name a mangled name ends with, led by its own length as every part of one is. */
+function nameAtEnd(mangled) {
+  // The longest that fits is taken, so a name with a digit in it is not cut at the digit.
+  for (let length = Math.min(MAX_SAMPLE_NAME_LENGTH, mangled.length); length > 0; length -= 1) {
+    const name = mangled.slice(-length);
+    const lengthSaid = mangled.slice(-length - String(length).length, -length);
+    if (lengthSaid === String(length) && IDENTIFIER.test(name)) return name;
+  }
+  return null;
 }
 
 /** @param {(offset: number, length: number) => Buffer} read stays inside the signature */
