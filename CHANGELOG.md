@@ -2,6 +2,14 @@
 
 What changed in each release published to npm, newest first.
 
+## 0.6.0 (not published yet)
+
+- Says when the screen code (HTML, JavaScript) of a Tauri app, which Tauri packs compressed into the program, was not read, and that it is checked in the project folder. Before, such an app could come out baseline with no word that its screen went unread. The JSON lists those programs in `unreadScreenCode`, and says it in `explain.unread`.
+- Lists, as a note, the paths of Rust source files that a program keeps as text after stripping: how many are the program's own and how many its dependencies', and whether one names the home folder of the machine that built it, with how `--remap-path-prefix` replaces that folder. Only a program that holds Rust's standard library counts, so other programs with text that ends in `.rs` are not noted.
+- Shows an example class name as its code spells it: a Swift class declared inside a function by its own name. A name that cannot be spelled so is left out instead of shown mangled.
+- For a first run: says before it starts that it only reads, shows every rating level with the result's own in brackets, ends every report with what to do next, and colors the rating and the kind of each finding at a terminal (`NO_COLOR` turns color off).
+- The README opens with a real run, what each rating means and how a run goes.
+
 ## 0.5.0 (2026-10-14)
 
 - Opens ZIP archives, told by how the file opens and not by its name (`.zip`, `.ipa`, `.apk`, `.aab`, `.jar`, `.msix` and others), and archives inside archives, three deep. Each file in one is read as if it lay on disk, and nothing is unpacked to disk.
