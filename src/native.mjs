@@ -19,13 +19,14 @@ export function countedNames({ kind, localNames, exportedNames }) {
  *
  * @param {string} path how the file is shown to the user
  * @param {object} build the build with the most names, which speaks for the file
- * @param {'mach-o' | 'elf' | 'pe'} build.format
+ * @param {'mach-o' | 'elf' | 'pe' | 'wasm'} build.format
  * @param {string} build.architecture
  * @param {number} build.names names of functions and variables that stripping takes out
  * @param {string[]} build.sources the original files, as the build recorded them
  * @param {boolean} build.namesBuilder whether a recorded path names the home folder of the machine that built it
  * @param {{ debugEntries?: number, debugSections?: number }} [debug] what the format writes for a
- *   debugger, where it does: entries in a Mach-O's symbol table, sections of DWARF in an ELF
+ *   debugger, where it does: entries in a Mach-O's symbol table, sections of DWARF in an ELF or a
+ *   WebAssembly module
  */
 export function checkNativeNames(path, { format, architecture, names, sources, namesBuilder }, debug = {}) {
   if (names < MIN_NAMES && sources.length === 0 && !(debug.debugSections > 0)) return [];

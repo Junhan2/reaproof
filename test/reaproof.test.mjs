@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { deflateRawSync } from 'node:zlib';
+import { deflateRawSync, gzipSync } from 'node:zlib';
 import { main } from '../src/cli.mjs';
 import { applyFix, planFix, undoLastFix } from '../src/fix.mjs';
 import { toWindowsShellArgument } from '../src/measure.mjs';
@@ -242,6 +242,13 @@ function cStrings(...strings) {
   return Buffer.from(strings.map((string) => `${string}\0`).join(''), 'latin1');
 }
 
+/** A number as an unsigned LEB128, the varint of Go, WebAssembly and protobuf. */
+function uvarint(value) {
+  const bytes = [];
+  for (; value >= 0x80; value = Math.floor(value / 0x80)) bytes.push((value % 0x80) | 0x80);
+  return Buffer.from([...bytes, value]);
+}
+
 /**
  * An embedded signature as in xnu's cs_blobs.h: an index, then the code directory and the
  * entitlements it lists. Those in `refused` are named and set to false, as a release build does.
@@ -432,16 +439,11 @@ function buildManifest({ appPackage = 'com.example.shop', application = {}, appl
  * true-or-false values, and its class when given.
  */
 function buildProtoManifest({ appPackage = 'com.example.shop', application = {}, applicationName } = {}) {
-  const varint = (number) => {
-    const bytes = [];
-    for (; number >= 0x80; number = Math.floor(number / 0x80)) bytes.push((number & 0x7f) | 0x80);
-    return Buffer.from([...bytes, number]);
-  };
   // A field is its number and kind, then a number, or the length and the bytes of a string or a message.
   const field = (number, value) =>
     typeof value === 'number'
-      ? Buffer.concat([varint(number * 8), varint(value)])
-      : Buffer.concat([varint(number * 8 + 2), varint(Buffer.byteLength(value)), Buffer.from(value)]);
+      ? Buffer.concat([uvarint(number * 8), uvarint(value)])
+      : Buffer.concat([uvarint(number * 8 + 2), uvarint(Buffer.byteLength(value)), Buffer.from(value)]);
   const ATTRIBUTE_IDS = { debuggable: 0x0101000f, testOnly: 0x01010272, name: 0x01010003 };
   const attribute = (name, value) =>
     field(4, Buffer.concat([
@@ -485,6 +487,54 @@ function buildDex(descriptors, { classes = descriptors.length } = {}) {
     dataAt += descriptor.length + 2;
   });
   return dex;
+}
+
+/**
+ * Writes a tar archive as POSIX lays one out: a header of 512 bytes for each file, then its
+ * bytes padded to 512, and two empty headers at the end. A path too long for the header gets a
+ * pax record before it, as GNU and BSD tar write one. Without `hasMagic` the headers are those
+ * of the tar from before POSIX, told only by their checksum.
+ */
+function buildTar(files, { hasMagic = true } = {}) {
+  const header = (name, size, type) => {
+    const block = Buffer.alloc(512);
+    block.write(name.slice(0, 100), 0, 'utf8');
+    block.write(size.toString(8).padStart(11, '0'), 124, 'latin1');
+    block.write(type, 156, 'latin1');
+    if (hasMagic) block.write('ustar\x0000', 257, 'latin1');
+    // The sum of the header's bytes, with its own field counted as spaces.
+    block.fill(0x20, 148, 156);
+    const sum = block.reduce((total, byte) => total + byte, 0);
+    block.write(`${sum.toString(8).padStart(6, '0')}\x00 `, 148, 'latin1');
+    return block;
+  };
+  const padded = (data) => Buffer.concat([data, Buffer.alloc((512 - (data.length % 512)) % 512)]);
+  const blocks = [];
+  for (const [path, content] of Object.entries(files)) {
+    const data = Buffer.from(content);
+    if (Buffer.byteLength(path) > 100) {
+      // A pax record is "<length> path=<path>\n", its length counting its own digits.
+      const line = ` path=${path}\n`;
+      let length = Buffer.byteLength(line) + 2;
+      while (String(length).length + Buffer.byteLength(line) !== length) length += 1;
+      const record = Buffer.from(`${length}${line}`);
+      blocks.push(header('PaxHeader', record.length, 'x'), padded(record));
+    }
+    blocks.push(header(path, data.length, '0'), padded(data));
+  }
+  return Buffer.concat([...blocks, Buffer.alloc(1024)]);
+}
+
+/**
+ * Writes a WebAssembly module with the custom sections given, as the core specification lays
+ * one out: the magic and version, then each section's id, size and content.
+ */
+function buildWasm(sections) {
+  const custom = ([name, content]) => {
+    const body = Buffer.concat([uvarint(Buffer.byteLength(name)), Buffer.from(name), content]);
+    return Buffer.concat([Buffer.from([0]), uvarint(body.length), body]);
+  };
+  return Buffer.concat([Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]), ...sections.map(custom)]);
 }
 
 /** The header of Hermes bytecode, as React Native writes it, with what follows left empty. */
@@ -701,11 +751,6 @@ function buildPe({ isLibrary = false, symbols = 0, debugFile = null, dotnet = nu
  * info, at a 16-byte boundary, and the function table with its list of source files.
  */
 function goSections({ modulePath, dependencies = [], isTrimmed = false, files, functions = 3 }) {
-  const uvarint = (value) => {
-    const bytes = [];
-    for (; value >= 0x80; value = Math.floor(value / 128)) bytes.push((value % 128) | 0x80);
-    return Buffer.from([...bytes, value]);
-  };
   const lines = [
     `path\t${modulePath}`,
     `mod\t${modulePath}\t(devel)\t`,
@@ -1913,8 +1958,9 @@ test('a container that is not opened is named first, and without the code that s
     'mixed/backup.zip': 'stands in for an archive',
     // One file compressed by itself is not a container: there is nothing in it but that file.
     'mixed/app.js.gz': 'stands in for a compressed copy',
-    // An archive compressed as a whole is one, though its name ends the same way.
-    'packed/Shop-1.0.tar.gz': 'stands in for a packed app',
+    // An archive compressed as a whole is one, though its name ends the same way. A `.tar.gz`
+    // is opened; one compressed with xz is not.
+    'packed/Shop-1.0.tar.xz': 'stands in for a packed app',
     'packed/index.html': '<p>hi</p>',
   });
 
@@ -1938,7 +1984,7 @@ test('a container that is not opened is named first, and without the code that s
   assert.equal(withNotes.status, 3);
   assert.match(withNotes.stdout, /Files read: 1 \(of 2 met\)\n[^]*rea risk: not rated/);
   assert.equal(packed.status, 3);
-  assert.match(packed.stdout, /Files read: 1 \(of 2 met\)\n  Containers that could not be opened: 1 \(Shop-1\.0\.tar\.gz\)/);
+  assert.match(packed.stdout, /Files read: 1 \(of 2 met\)\n  Containers that could not be opened: 1 \(Shop-1\.0\.tar\.xz\)/);
   // With code read beside it there is a rating, and the unread container is still said first.
   assert.equal(mixed.status, 0);
   assert.match(
@@ -2644,6 +2690,8 @@ test('a program built with Rust is noted for the paths of its own source files, 
     'standard/tool': Buffer.concat([windowsProgram(4096), Buffer.from(`\0${standard}\0`, 'latin1')]),
     'go/tool': Buffer.concat([linuxProgram(4096), Buffer.from(go, 'latin1')]),
     'large/tool': large,
+    // A WebAssembly module built with Rust keeps them as a program does.
+    'wasm/app.wasm': buildWasm([['rodata', Buffer.from(strings, 'latin1')]]),
     // The same text in a file that is not a program says nothing about how a program was built.
     'notes/strings.bin': Buffer.from(strings, 'latin1'),
   });
@@ -2657,6 +2705,7 @@ test('a program built with Rust is noted for the paths of its own source files, 
   assert.deepEqual(noteIn('standard'), []);
   assert.deepEqual(noteIn('go'), []);
   assert.deepEqual(noteIn('large'), [['tool', { ownFiles: 1, dependencyFiles: 0, namesBuilder: false, sample: 'src/ab/cd/boundary.rs' }]]);
+  assert.deepEqual(noteIn('wasm'), [['app.wasm', { ownFiles: 2, dependencyFiles: 3, namesBuilder: true, sample: 'src/billing.rs' }]]);
   assert.deepEqual(noteIn('notes'), []);
   const report = runCli([join(root, 'mac'), '--lang', 'en']).stdout;
   assert.match(
@@ -3114,6 +3163,53 @@ test('React Native code is read as JavaScript where it is, and noted where it is
     ['hermes-bytecode', 'Shop.app/main.jsbundle', 1234, 5678],
     ['unminified-code', 'renamed.apk:/assets/shop.android.bundle', null, null],
     ['unminified-code', 'script.apk:/assets/index.android.bundle', null, null],
+  ]);
+});
+
+test('a tar archive, compressed with gzip or not, is opened and what is in it is read', (t) => {
+  const key = ['sk', 'live', 'Zk9aB3xY7Qw8eR5tY2Mn0009'].join('_');
+  const deepMap = `package/${'nested/'.repeat(16)}app.js.map`;
+  const root = makeProject(t, {
+    // As npm pack writes a package, with every file under `package/`.
+    'out/shop-1.0.0.tgz': gzipSync(buildTar({ 'package/dist/app.js': BUNDLE, 'package/dist/app.js.map': MAP_WITH_SOURCES, [deepMap]: MAP_WITH_SOURCES })),
+    'out/shop-linux.tar': buildTar({ 'shop/config.yaml': `stripe: ${key}\n` }),
+    'out/shop-old.tar': buildTar({ 'shop/config.yaml': `stripe: ${key}\n` }, { hasMagic: false }),
+    'out/broken.tar.gz': gzipSync(Buffer.from('not a tar archive')),
+  });
+
+  const result = scan(join(root, 'out'));
+  const findings = result.findings.map(({ rule, path }) => `${rule} ${path}`);
+
+  for (const expected of [
+    'sourcemap-sources shop-1.0.0.tgz:/package/dist/app.js.map',
+    `sourcemap-sources shop-1.0.0.tgz:/${deepMap}`,
+    'secret shop-linux.tar:/shop/config.yaml',
+    'secret shop-old.tar:/shop/config.yaml',
+  ]) {
+    assert.ok(findings.includes(expected), expected);
+  }
+  assert.deepEqual([result.unreadableArchives, result.unopenedContainers], [['broken.tar.gz'], []]);
+});
+
+test('a WebAssembly module that kept its function names or debug information is reported, and a stripped one is not', (t) => {
+  // The name section's first subsection lists the functions it names, their count first.
+  const functionNames = (count) => Buffer.concat([Buffer.from([1]), uvarint(uvarint(count).length), uvarint(count)]);
+  const named = buildWasm([['name', functionNames(150)]]);
+  const root = makeProject(t, {
+    'dist/named.wasm': named,
+    'dist/debug.wasm': buildWasm([['.debug_info', Buffer.alloc(8)], ['.debug_line', Buffer.alloc(8)]]),
+    'dist/stripped.wasm': buildWasm([['producers', Buffer.alloc(4)]]),
+    // Cut short in the middle of a section: nothing can be said of it.
+    'dist/cut.wasm': named.subarray(0, named.length - 2),
+  });
+
+  const findings = scan(root)
+    .findings.map(({ rule, path, detail }) => [rule, path, detail.format, detail.names, detail.debugSections])
+    .sort();
+
+  assert.deepEqual(findings, [
+    ['native-symbols', 'dist/debug.wasm', 'wasm', 0, 2],
+    ['native-symbols', 'dist/named.wasm', 'wasm', 150, 0],
   ]);
 });
 

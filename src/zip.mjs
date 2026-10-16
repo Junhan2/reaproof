@@ -1,4 +1,5 @@
 import { inflateRawSync } from 'node:zlib';
+import { listFolder, startFolders } from './folders.mjs';
 
 // Layouts are those of PKWARE's APPNOTE.TXT (6.3.10), the specification of the ZIP format,
 // which `.ipa`, `.apk`, `.aab`, `.jar`, `.msix` and many other files are written in. Numbers
@@ -30,9 +31,6 @@ const SYMBOLIC_LINK = 0o120000;
 
 const MAX_DIRECTORY_BYTES = 64 * 1024 * 1024;
 const MAX_ENTRIES = 250_000;
-// One entry can name thousands of folders that hold nothing but each other, and each is
-// kept in memory, so folders are counted as well as files.
-const MAX_FOLDERS = 250_000;
 // Deflate at its worst makes data an eighth larger than it was, and a few bytes more to
 // open and close. Twice that is allowed for: an entry that says its packed form is larger
 // still is not telling the truth about one of its two sizes.
@@ -79,19 +77,7 @@ export function isZip(opening) {
 export function openZip(source) {
   const { directoryOffset, directoryBytes, entryCount } = readEndRecord(source);
   const directory = source.read(directoryOffset, directoryBytes);
-  const root = { path: '', name: '', isDirectory: true, directories: new Map(), files: [] };
-  let folderCount = 0;
-  const childDirectory = (parent, name) => {
-    let child = parent.directories.get(name);
-    if (!child) {
-      folderCount += 1;
-      if (folderCount > MAX_FOLDERS) throw new Error('the archive names implausibly many folders');
-      const path = parent.path ? `${parent.path}/${name}` : name;
-      child = { path, name, isDirectory: true, directories: new Map(), files: [] };
-      parent.directories.set(name, child);
-    }
-    return child;
-  };
+  const folders = startFolders();
 
   for (let index = 0, position = 0; index < entryCount; index += 1) {
     if (position + DIRECTORY_ENTRY_BYTES > directory.length || directory.readUInt32LE(position) !== DIRECTORY_ENTRY) {
@@ -120,16 +106,13 @@ export function openZip(source) {
     const segments = name.replaceAll('\\', '/').split('/').filter((segment) => segment !== '' && segment !== '.');
     if (segments.length === 0) continue;
 
-    const isDirectory = name.endsWith('/');
-    const parent = (isDirectory ? segments : segments.slice(0, -1)).reduce(childDirectory, root);
-    if (isDirectory) continue;
-    // Two entries may carry one name, and each has bytes of its own, so files are a list.
-    parent.files.push({ path: segments.join('/'), name: segments.at(-1), isDirectory: false, ...entry });
+    if (name.endsWith('/')) folders.addFolder(segments);
+    else folders.addFile(segments, entry);
   }
 
   return {
-    root,
-    list: ({ directories, files }) => [...directories.values(), ...files],
+    root: folders.root,
+    list: listFolder,
     read: (file) => readEntry(source, file),
     directoryOffset,
   };
