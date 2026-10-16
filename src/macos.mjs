@@ -1,15 +1,10 @@
+import { checkNativeNames, countedNames } from './native.mjs';
 import { HOME_FOLDER } from './program.mjs';
 import { worstSeverity } from './rules.mjs';
 
 // What a Mach-O file, the format of macOS and iOS programs, gives away or leaves open. The
 // facts come from `readMachO`; nothing here runs the file or asks the system about it, so
 // the checks give the same answer on any machine.
-
-// A stripped build keeps a marker or two. A handful of names says little about the code,
-// so names alone are reported from a hundred up.
-const MIN_NAMES = 100;
-// A path is long, and one is enough to show whose machine it names.
-const MAX_SAMPLE_SOURCES = 1;
 
 const HARDENED_RUNTIME = 0x10000;
 // The names `codesign -dv` prints for the bits of `flags=`, so the evidence can be compared with it.
@@ -65,7 +60,7 @@ export function checkMachO(path, images) {
 function checkNames(path, images) {
   const builds = images.map((image) => ({
     architecture: image.architecture,
-    names: image.localNames + (image.kind === 'executable' ? image.exportedNames : 0),
+    names: countedNames(image),
     debugEntries: image.debugEntries,
     sources: image.sourcePaths,
   }));
@@ -73,16 +68,8 @@ function checkNames(path, images) {
   // The builds in a universal binary are of the same code. The one with the most names
   // speaks for the file, so that its numbers can be checked against that one build.
   const [{ architecture, names, debugEntries, sources }] = builds.sort((one, other) => other.names - one.names);
-  if (sources.length === 0 && names < MIN_NAMES) return [];
-  const detail = {
-    architecture,
-    names,
-    debugEntries,
-    sourceCount: sources.length,
-    sampleSources: sources.slice(0, MAX_SAMPLE_SOURCES),
-    namesBuilder: sources.some((source) => HOME_FOLDER.test(source)),
-  };
-  return [{ rule: 'native-symbols', severity: 'medium', path, detail }];
+  const namesBuilder = sources.some((source) => HOME_FOLDER.test(source));
+  return checkNativeNames(path, { format: 'mach-o', architecture, names, sources, namesBuilder }, { debugEntries });
 }
 
 /**

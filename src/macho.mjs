@@ -1,3 +1,5 @@
+import { readRecords, textBeforeZero } from './bytes.mjs';
+
 // Layouts are those of Apple's <mach-o/fat.h>, <mach-o/loader.h> and <mach-o/nlist.h>, and
 // of xnu's cs_blobs.h for the signature. A Mach-O is little-endian on every Mac built since
 // 2006; the universal wrapper and the signature are big-endian.
@@ -71,7 +73,6 @@ const DEBUG_ENTRY_BITS = 0xe0;
 const EXTERNAL_BIT = 0x01;
 const DEFINED_BITS = 0x0e;
 const SOURCE_NAME_ENTRY = 0x64;
-const SYMBOLS_PER_READ = 65536;
 const MAX_NAME_BYTES = 1024;
 // Real programs name a few thousand original files in a few hundred kilobytes. The limit
 // keeps a file that claims far more from filling memory.
@@ -238,9 +239,7 @@ function readSymbols(read, { offset, count, namesOffset, namesBytes }, symbolByt
     return textBeforeZero(read(namesOffset + nameOffset, Math.min(MAX_NAME_BYTES, namesBytes - nameOffset)), 'utf8');
   };
 
-  for (let first = 0; first < count; first += SYMBOLS_PER_READ) {
-    const symbolsRead = Math.min(SYMBOLS_PER_READ, count - first);
-    const symbols = read(offset + first * symbolBytes, symbolsRead * symbolBytes);
+  for (const symbols of readRecords(read, offset, count, symbolBytes)) {
     for (let at = 0; at < symbols.length; at += symbolBytes) {
       const type = symbols[at + 4];
       if (type & DEBUG_ENTRY_BITS) {
@@ -277,12 +276,6 @@ function joinSourcePaths(names) {
     }
   }
   return [...paths];
-}
-
-/** @returns {string} the text up to the first zero byte, or all of it when there is none */
-function textBeforeZero(bytes, encoding) {
-  const end = bytes.indexOf(0);
-  return bytes.toString(encoding, 0, end === -1 ? bytes.length : end);
 }
 
 /**

@@ -372,6 +372,197 @@ function windowsProgram(byteLength) {
   return program;
 }
 
+const ELF_LIBRARY = 3;
+const ELF_FUNCTION = 2;
+
+/**
+ * A 64-bit little-endian ELF file as in <elf.h>: the header, the bytes of each section at a
+ * 16-byte boundary, then the section table. Symbols go in a symbol table with its own names;
+ * any other section is given by its name and bytes.
+ *
+ * @param {{ kind?: number, symbols?: { name: string, isLocal?: boolean }[], sections?: Record<string, Buffer> }} [options]
+ */
+function buildElf({ kind = ELF_EXECUTABLE, symbols = [], sections = {} } = {}) {
+  const list = [{ name: '', type: 0, bytes: Buffer.alloc(0) }];
+  if (symbols.length > 0) {
+    const names = cStrings('', ...symbols.map(({ name }) => name));
+    const table = Buffer.alloc(24 * (symbols.length + 1));
+    let nameAt = 1;
+    symbols.forEach(({ name, isLocal = true }, index) => {
+      const at = 24 * (index + 1);
+      table.writeUInt32LE(nameAt, at);
+      table[at + 4] = ((isLocal ? 0 : 1) << 4) | ELF_FUNCTION;
+      table.writeUInt16LE(1, at + 6);
+      nameAt += name.length + 1;
+    });
+    list.push({ name: '.strtab', type: 3, bytes: names });
+    list.push({ name: '.symtab', type: 2, bytes: table, link: list.length - 1 });
+  }
+  for (const [name, bytes] of Object.entries(sections)) list.push({ name, type: 1, bytes });
+  list.push({ name: '.shstrtab', type: 3, bytes: cStrings('', ...list.slice(1).map(({ name }) => name), '.shstrtab') });
+  let end = 64;
+  const offsets = list.map(({ bytes }) => {
+    const at = Math.ceil(end / 16) * 16;
+    end = at + bytes.length;
+    return at;
+  });
+  const tableAt = Math.ceil(end / 16) * 16;
+  const file = Buffer.alloc(tableAt + 64 * list.length);
+  file.write('\x7fELF\x02\x01\x01', 0, 'latin1');
+  file.writeUInt16LE(kind, 16);
+  file.writeUInt16LE(0x3e, 18);
+  file.writeBigUInt64LE(BigInt(tableAt), 0x28);
+  file.writeUInt16LE(64, 0x3a);
+  file.writeUInt16LE(list.length, 0x3c);
+  file.writeUInt16LE(list.length - 1, 0x3e);
+  let nameAt = 1;
+  list.forEach(({ name, type, bytes, link = 0 }, index) => {
+    bytes.copy(file, offsets[index]);
+    const at = tableAt + 64 * index;
+    file.writeUInt32LE(name ? nameAt : 0, at);
+    if (name) nameAt += name.length + 1;
+    file.writeUInt32LE(type, at + 4);
+    file.writeBigUInt64LE(BigInt(offsets[index]), at + 24);
+    file.writeBigUInt64LE(BigInt(bytes.length), at + 32);
+    file.writeUInt32LE(link, at + 40);
+  });
+  return file;
+}
+
+/**
+ * A 64-bit Windows program as in Microsoft's PE documentation: one section that holds a debug
+ * directory with a CodeView record and, for a .NET assembly, the CLR header and metadata with
+ * the row counts of its tables, then a COFF symbol table with a section record of its own.
+ */
+function buildPe({ isLibrary = false, symbols = 0, debugFile = null, dotnet = null } = {}) {
+  const sectionAddress = 0x1000;
+  const sectionAt = 0x200;
+  const parts = [];
+  let size = 0;
+  const place = (bytes) => {
+    const at = size;
+    parts.push(bytes, Buffer.alloc((4 - (bytes.length % 4)) % 4));
+    size += bytes.length + ((4 - (bytes.length % 4)) % 4);
+    return at;
+  };
+  const directories = {};
+  if (debugFile) {
+    const entry = Buffer.alloc(28);
+    const record = Buffer.concat([Buffer.from('RSDS', 'latin1'), Buffer.alloc(16), Buffer.from([1, 0, 0, 0]), cStrings(debugFile)]);
+    directories[6] = { address: sectionAddress + place(entry), size: entry.length };
+    const recordAt = place(record);
+    entry.writeUInt32LE(2, 12);
+    entry.writeUInt32LE(record.length, 16);
+    entry.writeUInt32LE(sectionAddress + recordAt, 20);
+    entry.writeUInt32LE(sectionAt + recordAt, 24);
+  }
+  if (dotnet) {
+    // The module, type and method tables are present, the module table with its one row.
+    const tables = Buffer.alloc(24 + 3 * 4);
+    tables.writeBigUInt64LE((1n << 0n) | (1n << 2n) | (1n << 6n), 8);
+    tables.writeUInt32LE(1, 24);
+    tables.writeUInt32LE(dotnet.types + 1, 28);
+    tables.writeUInt32LE(dotnet.methods, 32);
+    const version = Buffer.from('v4.0.30319\0\0', 'latin1');
+    const opening = Buffer.alloc(16);
+    opening.writeUInt32LE(0x424a5342, 0);
+    opening.writeUInt32LE(version.length, 12);
+    const streams = Buffer.alloc(16);
+    streams.writeUInt16LE(1, 2);
+    streams.writeUInt32LE(opening.length + version.length + streams.length, 4);
+    streams.writeUInt32LE(tables.length, 8);
+    streams.write('#~', 12, 'latin1');
+    const root = Buffer.concat([opening, version, streams, tables]);
+    const header = Buffer.alloc(72);
+    directories[14] = { address: sectionAddress + place(header), size: header.length };
+    header.writeUInt32LE(header.length, 0);
+    header.writeUInt32LE(sectionAddress + place(root), 8);
+    header.writeUInt32LE(root.length, 12);
+  }
+  const section = Buffer.concat(parts);
+  const records = Buffer.alloc(18 * (symbols + 2));
+  records.write('.text', 0, 'latin1');
+  records.writeInt16LE(1, 12);
+  records[16] = 3;
+  records[17] = 1;
+  for (let index = 0; index < symbols; index += 1) {
+    const at = 18 * (index + 2);
+    records.write(`f${index}`, at, 'latin1');
+    records.writeInt16LE(1, at + 12);
+    records[at + 16] = 2;
+  }
+  const symbolsAt = sectionAt + Math.ceil(section.length / 16) * 16 + 16;
+  const file = Buffer.alloc(symbolsAt + (symbols > 0 ? records.length : 0));
+  file.write('MZ', 0, 'latin1');
+  file.writeUInt32LE(64, 0x3c);
+  file.write('PE\0\0', 64, 'latin1');
+  const coff = 68;
+  file.writeUInt16LE(0x8664, coff);
+  file.writeUInt16LE(1, coff + 2);
+  if (symbols > 0) {
+    file.writeUInt32LE(symbolsAt, coff + 8);
+    file.writeUInt32LE(records.length / 18, coff + 12);
+  }
+  file.writeUInt16LE(240, coff + 16);
+  file.writeUInt16LE(0x22 | (isLibrary ? 0x2000 : 0), coff + 18);
+  const optional = coff + 20;
+  file.writeUInt16LE(0x20b, optional);
+  file.writeUInt32LE(16, optional + 108);
+  for (const [index, { address, size: bytes }] of Object.entries(directories)) {
+    file.writeUInt32LE(address, optional + 112 + index * 8);
+    file.writeUInt32LE(bytes, optional + 116 + index * 8);
+  }
+  const header = optional + 240;
+  file.write('.rdata', header, 'latin1');
+  file.writeUInt32LE(section.length, header + 8);
+  file.writeUInt32LE(sectionAddress, header + 12);
+  file.writeUInt32LE(section.length, header + 16);
+  file.writeUInt32LE(sectionAt, header + 20);
+  section.copy(file, sectionAt);
+  if (symbols > 0) records.copy(file, symbolsAt);
+  return file;
+}
+
+/**
+ * The two sections of a Go program that Reaproof reads, as Go's linker writes them: the build
+ * info, at a 16-byte boundary, and the function table with its list of source files.
+ */
+function goSections({ modulePath, dependencies = [], isTrimmed = false, files, functions = 3 }) {
+  const uvarint = (value) => {
+    const bytes = [];
+    for (; value >= 0x80; value = Math.floor(value / 128)) bytes.push((value % 128) | 0x80);
+    return Buffer.from([...bytes, value]);
+  };
+  const lines = [
+    `path\t${modulePath}`,
+    `mod\t${modulePath}\t(devel)\t`,
+    ...dependencies.map((dependency) => `dep\t${dependency}\tv1.0.0\th1:x=`),
+    ...(isTrimmed ? ['build\t-trimpath=true'] : []),
+    'build\tGOOS=linux',
+    '',
+  ];
+  const marker = Buffer.alloc(16, 0x55);
+  const moduleInfo = Buffer.concat([marker, Buffer.from(lines.join('\n')), marker]);
+  const header = Buffer.alloc(32);
+  header.write('\xff Go buildinf:', 0, 'latin1');
+  header[14] = 8;
+  header[15] = 2;
+  const version = Buffer.from('go1.27.2');
+  const fileTable = cStrings(...files);
+  const table = Buffer.alloc(8 + 8 * 8);
+  table.writeUInt32LE(0xfffffff1, 0);
+  table[6] = 1;
+  table[7] = 8;
+  table.writeBigUInt64LE(BigInt(functions), 8);
+  table.writeBigUInt64LE(BigInt(files.length), 16);
+  table.writeBigUInt64LE(BigInt(table.length), 8 + 5 * 8);
+  table.writeBigUInt64LE(BigInt(table.length + fileTable.length), 8 + 6 * 8);
+  return {
+    '.go.buildinfo': Buffer.concat([header, uvarint(version.length), version, uvarint(moduleInfo.length), moduleInfo]),
+    '.gopclntab': Buffer.concat([table, fileTable]),
+  };
+}
+
 /**
  * Stands in for `npx rea-agents`, answering with a fixed analysis so no network is needed,
  * and keeps the arguments of every start so a test can see what would have been run.
@@ -1153,12 +1344,13 @@ test('a Mac program that kept its development names and paths is reported, and a
   assert.deepEqual(
     result.findings.map(({ rule, severity, path, detail }) => [rule, severity, path, detail]).sort(),
     [
-      ['native-symbols', 'medium', 'Contents/Frameworks/Kit.framework/Kit', { architecture: 'arm64', names: 150, ...none }],
+      ['native-symbols', 'medium', 'Contents/Frameworks/Kit.framework/Kit', { format: 'mach-o', architecture: 'arm64', names: 150, ...none }],
       [
         'native-symbols',
         'medium',
         'Contents/Helpers/ci-built',
         {
+          format: 'mach-o',
           architecture: 'arm64',
           names: 20,
           debugEntries: 5,
@@ -1167,12 +1359,13 @@ test('a Mac program that kept its development names and paths is reported, and a
           namesBuilder: false,
         },
       ],
-      ['native-symbols', 'medium', 'Contents/Helpers/half-stripped', { architecture: 'arm64', names: 140, ...none }],
+      ['native-symbols', 'medium', 'Contents/Helpers/half-stripped', { format: 'mach-o', architecture: 'arm64', names: 140, ...none }],
       [
         'native-symbols',
         'medium',
         'Contents/MacOS/Shop',
         {
+          format: 'mach-o',
           architecture: 'arm64',
           names: 150,
           debugEntries: 5,
@@ -1624,7 +1817,7 @@ test('debug information is to be kept outside what ships, and Swift build state 
 
   assert.equal(status, 1);
   assert.match(stdout, /- Shop\.app\.dSYM \(debug information: original names and line numbers\)/);
-  assert.match(stdout, /Do not delete the debug information \(\.dSYM\): keep it outside what ships/);
+  assert.match(stdout, /Do not delete the debug information \(\.dSYM, \.pdb, mapping\.txt\): keep it outside what ships/);
   assert.doesNotMatch(stdout, /build\.db/);
 });
 
@@ -2341,4 +2534,167 @@ test('a source map too large to read whole is still judged by whether it carries
     runCli([root, '--lang', 'en']).stdout,
     /1 source map file\(s\) contain the full text of the original files\. They are too large for the files to be counted\./,
   );
+});
+
+test('a Linux or Android program that kept its names or debug information is reported, and a stripped one is not', (t) => {
+  const named = (count, options = {}) => Array.from({ length: count }, (_, index) => ({ name: `price_rule_${index}`, ...options }));
+  const root = makeProject(t, {
+    'out/server': buildElf({ symbols: named(150) }),
+    'out/debug': buildElf({ symbols: named(20), sections: { '.debug_line_str': cStrings('/home/dev/shop/src', 'pricing.c') } }),
+    'out/stripped': buildElf(),
+    // A library has to keep the names it exports, so only those it keeps to itself count.
+    'out/libshop.so': buildElf({ kind: ELF_LIBRARY, symbols: [...named(150, { isLocal: false }), ...named(10)] }),
+  });
+
+  const findings = scan(join(root, 'out')).findings.map(({ rule, path, detail }) => {
+    const { format, names, debugSections, sourceCount, namesBuilder } = detail;
+    return [rule, path, format, names, debugSections, sourceCount, namesBuilder];
+  });
+  const { stdout } = runCli([join(root, 'out'), '--lang', 'en']);
+
+  assert.deepEqual(findings.sort(), [
+    ['native-symbols', 'debug', 'elf', 20, 1, 1, true],
+    ['native-symbols', 'server', 'elf', 150, 0, 0, false],
+  ]);
+  assert.match(stdout, /For a Linux, Android or Windows program, strip it or link with -s/);
+  assert.match(stdout, /Some also hold debug information \(DWARF\)/);
+  assert.doesNotMatch(stdout, /Xcode/);
+});
+
+test('a Windows program that kept its names is reported, and one that names its builder in its debug file path, and .NET code, are noted', (t) => {
+  const builderPath = 'C:\\Users\\dev\\source\\repos\\Shop\\obj\\Release\\Builder.pdb';
+  const root = makeProject(t, {
+    'win/Shop.exe': buildPe({ symbols: 150 }),
+    'win/Builder.exe': buildPe({ debugFile: builderPath }),
+    // A debug file named by its file name alone says nothing of the machine.
+    'win/Plain.exe': buildPe({ symbols: 20, debugFile: 'Plain.pdb' }),
+    'win/Shop.Core.dll': buildPe({ isLibrary: true, dotnet: { types: 5, methods: 30 } }),
+  });
+
+  const findings = scan(join(root, 'win')).findings.map(({ rule, path, detail }) => [
+    rule,
+    path,
+    detail.names ?? null,
+    detail.debugFile ?? null,
+    detail.types ?? null,
+    detail.methods ?? null,
+  ]);
+  const { stdout } = runCli([join(root, 'win'), '--lang', 'en']);
+
+  assert.deepEqual(findings.sort(), [
+    ['debug-file-path', 'Builder.exe', null, builderPath, null, null],
+    ['dotnet-code', 'Shop.Core.dll', null, null, 5, 30],
+    ['native-symbols', 'Shop.exe', 150, null, null, null],
+  ]);
+  assert.match(stdout, /- Builder\.exe \(debug file C:\\Users\\dev\\/);
+  assert.match(stdout, /\/PDBALTPATH:%_PDB%/);
+  assert.match(stdout, /A free decompiler such as ILSpy turns it back into C#/);
+  assert.match(stdout, /- Shop\.Core\.dll \(5 types · 30 methods\)/);
+});
+
+test('a Go program is noted for the build info, function names and source paths that stay in it', (t) => {
+  const files = [
+    'example.com/shop/main.go',
+    'example.com/shop/pricing/rules.go',
+    'github.com/lib/pq@v1.10.9/conn.go',
+    'runtime/proc.go',
+    // Go's own standard library keeps copies of a few packages under its vendor folder.
+    'vendor/golang.org/x/net/idna/idna.go',
+  ];
+  const untrimmed = ['/Users/dev/shop/main.go', '/usr/local/go/src/runtime/proc.go', '/Users/dev/go/pkg/mod/github.com/lib/pq@v1.10.9/conn.go'];
+  const root = makeProject(t, {
+    'trimmed/shop': buildElf({
+      sections: goSections({ modulePath: 'example.com/shop', dependencies: ['github.com/lib/pq'], isTrimmed: true, files, functions: 1234 }),
+    }),
+    'untrimmed/shop': buildElf({ sections: goSections({ modulePath: 'example.com/shop', files: untrimmed }) }),
+    // Bytes that open like a Go function table, in a program without Go's build info.
+    'other/tool': buildElf({ sections: { '.data': goSections({ modulePath: 'x', files: ['x.go'] })['.gopclntab'] } }),
+  });
+  const noteIn = (folder) => scan(join(root, folder)).findings.find(({ rule }) => rule === 'go-program')?.detail;
+
+  assert.deepEqual(noteIn('trimmed'), {
+    goVersion: 'go1.27.2',
+    modulePath: 'example.com/shop',
+    dependencies: 1,
+    isTrimmed: true,
+    functions: 1234,
+    ownFiles: 2,
+    dependencyFiles: 1,
+    namesBuilder: false,
+    sample: 'example.com/shop/main.go',
+  });
+  assert.deepEqual(noteIn('untrimmed'), {
+    goVersion: 'go1.27.2',
+    modulePath: 'example.com/shop',
+    dependencies: 0,
+    isTrimmed: false,
+    functions: 3,
+    ownFiles: 1,
+    dependencyFiles: 1,
+    namesBuilder: true,
+    sample: '/Users/dev/shop/main.go',
+  });
+  assert.equal(noteIn('other'), undefined);
+  assert.match(runCli([join(root, 'untrimmed'), '--lang', 'en']).stdout, /Build with -trimpath and they start at the module path instead/);
+});
+
+test('debug files are told by how they open, and the files of Flutter packages are passed over', (t) => {
+  const handwritten = Array.from({ length: 12 }, (_, index) => `export const rule${index} = (total) => total * 0.9;`).join('\n');
+  const root = makeProject(t, {
+    'out/Shop.pdb': Buffer.concat([Buffer.from('BSJB', 'latin1'), Buffer.alloc(60)]),
+    'out/Native.pdb': Buffer.from('Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0', 'latin1'),
+    // A protein structure, as a science site serves one.
+    'out/data/1abc.pdb': 'HEADER    HYDROLASE\nATOM      1  N   MET A   1\n',
+    'out/mapping.txt': '# compiler: R8\n# compiler_version: 8.5.35\ncom.shop.Pricing -> a.b:\n',
+    'out/notes/mapping.txt': 'which page maps to which address\n',
+    // Flutter tells its asset folder by the manifests it writes there, in an app and in a web build.
+    'out/assets/flutter_assets/AssetManifest.bin': Buffer.from([0x0c, 0x01]),
+    'out/assets/flutter_assets/packages/wakelock_plus/assets/no_sleep.js': handwritten,
+    'out/assets/flutter_assets/app.js': handwritten,
+    'out/web/assets/FontManifest.json': '[]',
+    'out/web/assets/packages/wakelock_plus/assets/no_sleep.js': handwritten,
+    // A folder of that name elsewhere is read.
+    'out/site/packages/app.js': handwritten,
+  });
+
+  const findings = scan(join(root, 'out')).findings.map(({ rule, severity, path, detail }) => [rule, severity, path, detail.kind ?? null]);
+
+  assert.deepEqual(findings.sort(), [
+    ['stray-file', 'high', 'Native.pdb', 'debug-symbols'],
+    ['stray-file', 'high', 'Shop.pdb', 'debug-symbols'],
+    ['stray-file', 'high', 'mapping.txt', 'debug-symbols'],
+    ['unminified-code', 'medium', 'assets/flutter_assets/app.js', null],
+    ['unminified-code', 'medium', 'site/packages/app.js', null],
+  ]);
+});
+
+const canBuildGo = spawnSync('go', ['version']).status === 0;
+
+test('a program built by the real Go tools is noted with what go version -m says of it', { skip: !canBuildGo }, (t) => {
+  const root = makeProject(t, {
+    'go.mod': 'module example.com/shoplab\n\ngo 1.21\n',
+    'main.go': 'package main\n\nimport "fmt"\n\nfunc applyDiscount(total float64) float64 { return total * 0.9 }\n\nfunc main() { fmt.Println(applyDiscount(100)) }\n',
+  });
+  const env = { ...process.env, GOTOOLCHAIN: 'local', CGO_ENABLED: '0' };
+  const ending = process.platform === 'win32' ? '.exe' : '';
+  for (const [output, options] of [['default', []], ['trimmed', ['-trimpath', '-ldflags=-s -w']]]) {
+    const built = spawnSync('go', ['build', ...options, '-o', join(root, 'out', `${output}${ending}`), '.'], { cwd: root, env });
+    assert.equal(built.status, 0, String(built.stderr));
+  }
+
+  // Built here and never started.
+  const { findings } = scan(join(root, 'out'));
+  const plain = (path) => path.replace(/\.exe$/, '');
+  const notes = Object.fromEntries(findings.filter(({ rule }) => rule === 'go-program').map(({ path, detail }) => [plain(path), detail]));
+  const goSays = String(spawnSync('go', ['version', '-m', join(root, 'out', `default${ending}`)], { env }).stdout);
+
+  assert.match(goSays, /\tmod\texample\.com\/shoplab\t/);
+  assert.equal(notes.default.modulePath, 'example.com/shoplab');
+  assert.equal(notes.default.dependencies, 0);
+  assert.equal(notes.default.isTrimmed, false);
+  assert.equal(notes.trimmed.isTrimmed, true);
+  assert.equal(notes.trimmed.sample, 'example.com/shoplab/main.go');
+  assert.ok(notes.default.functions > 100, String(notes.default.functions));
+  // Only the build that was not stripped keeps a symbol table, whatever format the system uses.
+  assert.deepEqual(findings.filter(({ rule }) => rule === 'native-symbols').map(({ path }) => plain(path)), ['default']);
 });
