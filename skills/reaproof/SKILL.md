@@ -1,6 +1,6 @@
 ---
 name: reaproof
-description: Checks what AI reverse-engineering agents such as rea can read from a shipped web, Electron or macOS build, and closes what can be closed. Use when the user asks to protect their app from being cloned or reverse engineered, mentions rea, or asks before a release whether source maps, secret keys or stray files are exposed.
+description: Checks what AI reverse-engineering agents such as rea can read from a shipped web, Electron, macOS, Windows, Linux or Android build, and closes what can be closed. Use when the user asks to protect their app from being cloned or reverse engineered, mentions rea, or asks before a release whether source maps, secret keys or stray files are exposed.
 ---
 
 # Reaproof
@@ -14,6 +14,9 @@ The user may have no security background. Explain every finding by its effect on
    - If the answer is `{ "error": ... }` instead, `error.code` says why. `artifact-needed` means the folder is a project in another language (Swift, Rust, Go and the like), where Reaproof does not guess what ships: ask the user which file or folder ships, for example the `.app`, and run `npx reaproof <that path> --json`. `page-unreachable` carries the reason an address did not answer.
    - `unrated` means what ships could not be read. Never report it as clean. `explain.unread` says what was not read and how to get at it, for example how to open a disk image. Do that and run the check on what is inside.
    - If `unreadScreenCode` lists a program, it is a Tauri app whose screen code was not read: run `npx reaproof --json` in the project folder as well, where that code is the build output.
+   - `explain.unread` also names folders that could not be opened, files over 30 MB that were searched for keys alone, and what the project's `.reaproofignore` left out (`ignored`). Say each of these to the user.
+   - Never add a pattern to `.reaproofignore` to make a finding go away. Only the user decides that a file is known and accepted, and a file left out still ships.
+   - For GitHub code scanning in CI, `npx reaproof --sarif` prints the same result as SARIF. Do not use it together with `--json`.
 3. Tell the user the risk level first, then what is exposed, why it matters and what you propose to change. Start with critical and high findings. Say what `explain.unread` lists as well, because it limits what the result covers.
 4. After the user agrees, apply the fixes below.
 5. Rebuild and run `npx reaproof` again to confirm.
@@ -31,10 +34,16 @@ The user may have no security background. Explain every finding by its effect on
 - `secret`, `env-value`: see "Secret values" below.
 - `unshipped-source`, `unminified-code`: adjust the packaging file list and turn on minification.
 - `electron-fuse`: turn the listed fuses off at package time with `@electron/fuses`.
+- `electron-asar-integrity`: at package time, turn on `EnableEmbeddedAsarIntegrityValidation` and `OnlyLoadAppFromAsar` with `@electron/fuses`, then run the check again. On Linux, Electron does not check this.
+- `asar-readable`: a note. An ASAR archive is no more closed than a ZIP.
 - `macos-entitlement`, `macos-runtime`: sign the release without `get-task-allow` and with the Hardened Runtime. Each program in an app is signed by itself, so check the helper programs the finding names, not only the main one.
-- `native-symbols`: the program kept the names of its functions and variables. Strip it before it is signed, in the build or release script: plain `strip` for a program, `strip -x` for a library. Keep the `.dSYM` first. This changes how the user builds a release, so propose it and let them decide, then run the check again: the finding is gone when it worked.
+- `android-debug-build`: build again as a release build (`./gradlew assembleRelease` or `bundleRelease`) signed with the user's own upload key, never the debug key.
+- `android-class-names`: R8 shrinking (`isMinifyEnabled = true` in the release build type) gives the classes short names. Keep the `mapping.txt` it writes outside what ships. This changes how the app is built: propose it and let the user decide.
+- `native-symbols`: the program kept the names of its functions and variables. Strip it before it is signed, in the build or release script: plain `strip` for a program, `strip -x` for a library. Keep the `.dSYM` first. This changes how the user builds a release, so propose it and let them decide, then run the check again: the finding is gone when it worked. For a WebAssembly module, `wasm-opt --strip-debug` from Binaryen takes out the function names and the debug information.
 - `kept-names`: a note, not a leak. These names stay because the program uses them while it runs, and the count takes in the names of the system frameworks it uses. Do not rename or obfuscate code to make the note go away. Leaving out the names of Swift properties and cases is a build setting with a price, since code that turns such a name into text changes: mention it and let the user decide.
 - `source-paths`: a note. A program built with Rust keeps the paths of its source files as text, and `strip` does not take them out. When the note says a path names the home folder of the machine that built it, propose building with `--remap-path-prefix=<home folder>=~` (in `RUSTFLAGS` or `build.rustflags` of `.cargo/config.toml`). The program's own file names cannot be left out with a stable setting: say so rather than renaming files.
+- `debug-file-path`: leave only the file name in the path: `/PDBALTPATH:%_PDB%` for the MSVC linker, the `PathMap` property for .NET.
+- `hermes-bytecode`, `dotnet-code`, `go-program`: notes. That code reads back with the tools for its kind. Logic that must not be copied belongs on a server.
 - `developer-file`: a note, not a leak. List the files and ask whether they ship on purpose. If not, leave them out of the deploy.
 - `prompt-candidate`: a guess. If it is a prompt, move it to a server.
 - `endpoint`: a list, not a leak. Review with the user that each address checks who is calling.

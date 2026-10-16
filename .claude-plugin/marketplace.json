@@ -8,7 +8,7 @@
     {
       "name": "reaproof",
       "source": ".",
-      "description": "A skill that runs the Reaproof check on a web, Electron or macOS build, explains each finding in plain words and applies the fixes after approval."
+      "description": "A skill that runs the Reaproof check on a web, Electron, macOS, Windows, Linux or Android build, explains each finding in plain words and applies the fixes after approval."
     }
   ]
 }
