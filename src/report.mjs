@@ -175,6 +175,13 @@ const KO = {
         '출시본에서는 @electron/fuses 로 꺼 두세요.',
       ],
     },
+    'electron-asar-integrity': {
+      title: 'Electron 앱이 바뀐 코드도 그대로 실행합니다',
+      body: () => [
+        '앱 코드(app.asar)가 포장할 때와 달라지면 실행을 막는 두 fuse(embeddedAsarIntegrityValidation, onlyLoadAppFromAsar)가 꺼져 있습니다. 누구나 app.asar 를 풀어 코드를 고친 뒤(예: 결제 확인을 빼고) 다시 묶어 실행할 수 있습니다.',
+        '포장할 때 @electron/fuses 로 두 fuse 를 켜세요. 검사에 쓰는 해시는 Electron Forge 7.4.0 · Electron Packager 18.3.1 이상이 알아서 넣습니다. macOS 는 Electron 16, Windows 는 Electron 30 부터 됩니다.',
+      ],
+    },
     'unshipped-source': {
       title: '원본 소스나 시험 파일이 그대로 들어 있습니다',
       body: ({ files }) => [
@@ -651,6 +658,13 @@ const EN = {
         'Turn them off in the release with @electron/fuses.',
       ],
     },
+    'electron-asar-integrity': {
+      title: 'The Electron app runs its code even when it was changed',
+      body: () => [
+        'The two fuses that make Electron refuse app code (app.asar) that differs from what was packaged, embeddedAsarIntegrityValidation and onlyLoadAppFromAsar, are off. Anyone can unpack app.asar, change the code (to skip a payment check, say), pack it again and run it.',
+        'Turn both on at package time with @electron/fuses. Electron Forge 7.4.0 and Electron Packager 18.3.1 or later add the hash the check uses by themselves. It works on macOS from Electron 16 and on Windows from Electron 30.',
+      ],
+    },
     'unshipped-source': {
       title: 'Original source or test files are included as they are',
       body: ({ files }) => [
@@ -1025,6 +1039,7 @@ export function createReporter(language) {
     if (rule === 'env-value') return `- ${detail.variable} (${detail.envFile}) → ${path}`;
     if (rule === 'stray-file') return `- ${path} (${t.strayKinds[detail.kind]})`;
     if (rule === 'electron-fuse') return `- ${path}: ${detail.enabled.join(', ')}`;
+    if (rule === 'electron-asar-integrity') return `- ${path}: ${detail.disabled.join(', ')}`;
     if (rule === 'prompt-candidate') return `- ${path}: "${detail.preview}…"`;
     if (rule === 'macos-entitlement') return `- ${path}: ${detail.entitlements.join(', ')}`;
     if (rule === 'macos-runtime') {

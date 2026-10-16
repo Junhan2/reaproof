@@ -1315,7 +1315,8 @@ test('development fuses left on in an Electron binary are reported, whatever sys
   });
 
   const findings = scan(root)
-    .findings.map(({ rule, path, detail }) => [rule, path, detail.enabled])
+    .findings.filter(({ rule }) => rule === 'electron-fuse')
+    .map(({ rule, path, detail }) => [rule, path, detail.enabled])
     .sort();
 
   assert.deepEqual(findings, [
@@ -1323,6 +1324,47 @@ test('development fuses left on in an Electron binary are reported, whatever sys
     ['electron-fuse', 'dist/linux-unpacked/shop', ['runAsNode', 'nodeOptions', 'nodeCliInspect']],
     ['electron-fuse', 'dist/win-unpacked/Shop.exe', ['nodeOptions']],
   ]);
+});
+
+test('an Electron binary that runs app code it has not checked is noted, except on Linux, where Electron does not check it', (t) => {
+  const sentinel = 'dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX';
+  // The fifth and sixth fuses are embeddedAsarIntegrityValidation and onlyLoadAppFromAsar.
+  const withFuses = (states, opening = 'AAAA') =>
+    Buffer.concat([Buffer.from(opening, 'latin1'), Buffer.alloc(4096, 0x41), Buffer.from(sentinel), Buffer.from([1, states.length]), Buffer.from(states)]);
+  const macBinary = 'Contents/Frameworks/Electron Framework.framework/Electron Framework';
+  const root = makeProject(t, {
+    'package.json': '{}',
+    [`dist/Stock.app/${macBinary}`]: withFuses('000000000'),
+    [`dist/Checked.app/${macBinary}`]: withFuses('000011000'),
+    'dist/win-unpacked/Shop.exe': withFuses('000001000'),
+    'dist/linux-unpacked/shop': withFuses('000000000', '\x7fELF'),
+    // An Electron older than these fuses is not told to turn on what it does not have.
+    [`dist/Old.app/${macBinary}`]: withFuses('0000'),
+  });
+
+  const findings = scan(root)
+    .findings.filter(({ rule }) => rule === 'electron-asar-integrity')
+    .map(({ path, severity, detail }) => [path, severity, detail.disabled])
+    .sort();
+
+  assert.deepEqual(findings, [
+    [`dist/Stock.app/${macBinary}`, 'info', ['embeddedAsarIntegrityValidation', 'onlyLoadAppFromAsar']],
+    ['dist/win-unpacked/Shop.exe', 'info', ['embeddedAsarIntegrityValidation']],
+  ]);
+});
+
+test('an archive entry with no size or place to read it by is the one file left unread', (t) => {
+  const key = ['sk', 'live', 'Zk9aB3xY7Qw8eR5tY2Mn0007'].join('_');
+  const root = makeProject(t, {
+    'package.json': '{}',
+    // As in an app that ships: one entry with a negative size, which stops tools that unpack every file.
+    'dist/app.asar': buildAsar({ 'main.js': `const stripe = "${key}";`, 'stub.bin': { content: '', claimedBytes: -1000 } }),
+  });
+
+  const result = scan(root);
+
+  assert.deepEqual([result.unreadableArchives, result.unreadableFiles], [[], ['dist/app.asar:/stub.bin']]);
+  assert.ok(result.findings.some(({ rule, path }) => rule === 'secret' && path === 'dist/app.asar:/main.js'));
 });
 
 test('server addresses are listed as a note, without the tokens in them, and a prompt in client code is flagged as a candidate', (t) => {
@@ -2057,21 +2099,21 @@ test('a file made to look like far more than it is costs little and breaks nothi
       'vast.bin': { content: '', claimedBytes: 600 * 1024 * 1024 },
       'huge.bin': { content: '', claimedBytes: 31 * 1024 * 1024 },
     }),
-    // A size that is no number at all: nothing such an archive says is gone by.
+    // A size that is no number at all: that file is not read.
     'odd.asar': buildAsar({ 'main.js': { content: BUNDLE, claimedBytes: 'many' } }),
   });
 
   const result = scan(root);
 
-  assert.deepEqual([result.filesScanned, result.programsScanned], [3, 0]);
+  assert.deepEqual([result.filesScanned, result.programsScanned], [4, 0]);
   assert.deepEqual(
     [...new Set(result.findings.map(({ rule, path }) => `${rule} ${path}`))].sort(),
-    ['asar-readable claims.asar', 'secret flood.bin'],
+    ['asar-readable claims.asar', 'asar-readable odd.asar', 'secret flood.bin'],
   );
   assert.equal(result.findings.filter(({ rule }) => rule === 'secret').length, 200);
   assert.deepEqual(
-    [result.skippedLargeFiles, result.unreadableFiles, result.unreadableArchives],
-    [['claims.asar:/vast.bin'], ['claims.asar:/huge.bin'], ['odd.asar']],
+    [result.skippedLargeFiles, result.unreadableFiles.sort(), result.unreadableArchives],
+    [['claims.asar:/vast.bin'], ['claims.asar:/huge.bin', 'odd.asar:/main.js'], []],
   );
 });
 

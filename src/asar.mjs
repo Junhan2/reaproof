@@ -2,7 +2,8 @@ const SIZE_PICKLE_BYTES = 8;
 const MAX_HEADER_BYTES = 64 * 1024 * 1024;
 
 /**
- * @typedef {{ path: string, name: string, isDirectory: false, size: number, offset: number }} AsarFile
+ * @typedef {{ path: string, name: string, isDirectory: false, size: number, offset: number, isUnreadable?: true }} AsarFile
+ *   `isUnreadable` marks a file whose entry in the header gives no size or place to read it by
  * @typedef {{ path: string, name: string, isDirectory: true, node: object }} AsarDirectory
  *   `node` is the directory's own part of the header, kept for `list`
  */
@@ -42,7 +43,10 @@ export function openAsar(source) {
     // Counting goes through the whole header, so a malformed one fails here, before a caller reports anything.
     fileCount: countFiles(root),
     list: listEntries,
-    read: (file) => source.read(dataStart + file.offset, file.size),
+    read: (file) => {
+      if (file.isUnreadable) throw new Error('a file without a usable size or place');
+      return source.read(dataStart + file.offset, file.size);
+    },
   };
 }
 
@@ -55,9 +59,11 @@ function listEntries({ path: directoryPath, node }) {
     // Symlinks have no bytes; unpacked entries live next to the archive, not in it.
     else if (entry.link === undefined && !entry.unpacked) {
       const file = { path, name, isDirectory: false, size: entry.size, offset: Number(entry.offset) };
-      // The header is text someone wrote: a size or a place that is not a count of bytes is not gone by.
-      if (!isByteCount(file.size) || !isByteCount(file.offset)) throw new Error('a file without a usable size or place');
-      entries.push(file);
+      // The header is text someone wrote: a size or a place that is not a count of bytes is not
+      // gone by. That one file is not read, and the others are: Electron itself runs an app
+      // whose archive has such an entry, and leaving the whole archive unread hides the app.
+      const isUsable = isByteCount(file.size) && isByteCount(file.offset);
+      entries.push(isUsable ? file : { ...file, size: 0, offset: 0, isUnreadable: true });
     }
   }
   return entries;

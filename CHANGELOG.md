@@ -13,6 +13,8 @@ What changed in each release published to npm, newest first.
 - Shows the parts of a server address that look like a key or a token as `…`, in the list of server addresses and in `measure`: 0.6.0 listed a Discord webhook address whole, its token included.
 - Reads Android app packages and app bundles: a debuggable or test-only build, one signed with the Android debug key, and an app whose own classes keep their names, as R8 would not leave them. Termux 0.118.3's debug build from GitHub was rated baseline before; it is high now, and debuggable, as `aapt` says. A bundle (`.aab`) made from it reads the same; 0.6.0 searched one for keys only.
 - Notes Hermes bytecode, with how many functions and strings it holds, and reads React Native's bundle as JavaScript when it is, under another name ending in `.bundle` or `.jsbundle` too: before, `index.android.bundle` and `main.jsbundle` were only searched for keys.
+- Notes a packaged Electron app for macOS or Windows that runs its code even after someone changed it: the two fuses that check `app.asar` against what was packaged are off, as they are by default. On the 17 Electron apps in `/Applications` of the test Mac it reads them as `@electron/fuses read` does.
+- Reads the rest of an ASAR archive when one file in its header has no usable size or place, and lists that file as unread. A shipping app has such a file, with a negative size, and 0.6.0 left its whole archive unread.
 - Passes over the `packages` folder that sits beside Flutter's asset manifests, in an app and in a web build: it holds the files of the packages the app uses. A plugin's script there had rated LocalSend 1.18.2 moderate.
 
 ## 0.6.0 (2026-10-16)
