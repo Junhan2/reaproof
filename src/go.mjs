@@ -1,4 +1,4 @@
-import { readChunks, unlessMalformed } from './bytes.mjs';
+import { readChunks, readVarint, unlessMalformed } from './bytes.mjs';
 import { ABSOLUTE_PATH, HOME_FOLDER } from './program.mjs';
 
 // A Go program says in its build info which Go built it, from which module, with which
@@ -110,7 +110,7 @@ function readBuildInfo(source, at) {
   if (!(bytes[BUILD_INFO_MAGIC.length + 1] & INLINE_STRINGS_FLAG)) return null;
   let cursor = BUILD_INFO_HEADER_BYTES;
   const readString = () => {
-    const [length, used] = readUvarint(bytes, cursor);
+    const [length, used] = readVarint(bytes, cursor);
     const start = cursor + used;
     if (start + length > bytes.length) throw new Error('a string runs past the build info');
     cursor = start + length;
@@ -135,16 +135,6 @@ function readBuildInfo(source, at) {
 }
 
 /** Go's unsigned varint: seven bits a byte, lowest first, the top bit saying more follow. */
-function readUvarint(bytes, at) {
-  let value = 0;
-  for (let used = 0; used < 5 && at + used < bytes.length; used += 1) {
-    const byte = bytes[at + used];
-    value += (byte & 0x7f) * 2 ** (7 * used);
-    if (byte < 0x80) return [value, used + 1];
-  }
-  throw new Error('not a varint');
-}
-
 function readFunctionTable(source, at) {
   const opening = source.read(at, 8);
   const magic = opening.readUInt32LE(0);

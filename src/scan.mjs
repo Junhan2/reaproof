@@ -1,8 +1,9 @@
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { checkAndroidPackage, checkDexClasses, checkHermes, collectDexClasses, findAndroidManifest, startDexClasses } from './android.mjs';
 import { openAsar } from './asar.mjs';
-import { fileBytes, lazyBytes, readChunks } from './bytes.mjs';
+import { fileBytes, lazyBytes, readChunks, utf16Text } from './bytes.mjs';
 import { checkDebugFile, checkStrayDirectory, isSealedContainer, isTextless, strayDirectoryKind } from './checks/paths.mjs';
 import { checkSecrets, checkSecretsInBytes, MAX_KEYS_IN_A_FILE } from './checks/secrets.mjs';
 import { checkLargeMap, collectLargeMap, startLargeMap } from './checks/sourcemaps.mjs';
@@ -54,6 +55,10 @@ const DEPENDENCY_FOLDERS = new Set(['node_modules', 'site-packages', 'dist-packa
 // writes of the app's assets: in `flutter_assets` in an app, in `assets` in a web build.
 const FLUTTER_PACKAGES = 'packages';
 const FLUTTER_ASSET_MANIFESTS = new Set(['AssetManifest.bin', 'AssetManifest.json', 'FontManifest.json']);
+// React Native writes an app's code to one bundle, `index.android.bundle` or `main.jsbundle`
+// unless the build names it otherwise, as JavaScript or, with Hermes, as bytecode. As
+// JavaScript, which has no zero byte in it as Hermes's header has, it gets every check a `.js` file gets.
+const SCRIPT_BUNDLE = /\.(?:bundle|jsbundle)$/;
 // How a Linux and a Windows program open. Other files are not read for what those keep.
 const ELF_OPENING = '\x7fELF';
 const PE_OPENING = 'MZ';
@@ -268,9 +273,10 @@ export function withoutFiles(scanResult, removedPaths) {
  * @param {string | null} file.diskPath null for a file inside an archive
  * @param {(use: (source: import('./bytes.mjs').ByteSource) => void) => boolean} file.open
  *   hands the file's bytes to `use`; false when the file cannot be opened at all
- * @param {{ depth: number, budget: { left: number }, isAsar: boolean } | null} [file.within]
+ * @param {{ depth: number, budget: { left: number }, isAsar: boolean, dexClasses?: object } | null} [file.within]
  *   the archives the file sits in: how many of them, how much may still be read out of the
- *   outermost, and whether the one right around the file is an ASAR
+ *   outermost, whether the one right around the file is an ASAR, and, in an Android app
+ *   package, where the classes of the app's own code are counted
  */
 function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
   const { result } = state;
@@ -318,9 +324,15 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
       result.skippedLargeFiles.push(displayPath);
     } else {
       result.filesScanned += 1;
-      if (isReadWhole) scanText({ displayPath, extension, diskPath, source }, state);
+      const isScriptBundle =
+        SCRIPT_BUNDLE.test(name) && source.byteLength <= MAX_FILE_BYTES && !readStart(source.byteLength).includes(0);
+      if (isReadWhole || isScriptBundle) scanText({ displayPath, extension: isScriptBundle ? '.js' : extension, diskPath, source }, state);
       else if (isLargeMap) scanLargeMap({ displayPath, diskPath, source }, state);
-      else scanBytes({ displayPath, diskPath, source, opening }, state);
+      else {
+        scanBytes({ displayPath, diskPath, source, opening }, state);
+        // The classes of an Android app's own code are counted as each of its DEX files goes by.
+        if (within?.dexClasses) collectDexClasses(name, source, within.dexClasses);
+      }
     }
   });
   if (!wasOpened) result.unreadableFiles.push(displayPath);
@@ -357,6 +369,13 @@ function scanArchive(openArchive, source, displayPath, within, state) {
   state.result.archivesOpened += 1;
   // That an ASAR is no more closed than a ZIP is news to some who ship one.
   if (within.isAsar) addFindings(state, [archiveFinding(displayPath, archive.fileCount)], null);
+  // An Android app package or bundle says how it was built in its manifest and its signature.
+  // The classes of the app's own code are counted as each DEX file is read for keys.
+  const manifest = openArchive === openZip ? findAndroidManifest(archive.root) : null;
+  const android = manifest ? checkAndroidPackage(displayPath, source, archive, manifest, within.budget) : null;
+  if (android) addFindings(state, android.findings, null);
+  const dexClasses = android?.manifest?.appPackage ? startDexClasses(android.manifest) : null;
+  const inside = dexClasses ? { ...within, dexClasses } : within;
 
   // A path is worked out only where something is said about it. An archive can put one
   // file under tens of thousands of folders, each with a path longer than the last.
@@ -376,8 +395,9 @@ function scanArchive(openArchive, source, displayPath, within, state) {
       use(lazyBytes(inner.size, () => archive.read(inner)));
       return true;
     };
-    scanFile({ displayPath: shownPath(inner), name: inner.name, diskPath: null, open, within }, state);
+    scanFile({ displayPath: shownPath(inner), name: inner.name, diskPath: null, open, within: inside }, state);
   }
+  if (dexClasses) addFindings(state, checkDexClasses(displayPath, dexClasses), null);
 }
 
 function scanText({ displayPath, extension, diskPath, source }, state) {
@@ -430,6 +450,7 @@ function decodeText(bytes) {
  * and debug information it keeps, a Mach-O for its signature, a .NET assembly for what it
  * defines, and Electron's binary for its fuses. Any program is read for the paths of the
  * Rust source it was built from, for what Go keeps of its own, and for a Tauri app's screen.
+ * Hermes bytecode is read for its header.
  */
 function scanBytes({ displayPath, diskPath, source, opening }, state) {
   const images = readMachO(source);
@@ -443,6 +464,7 @@ function scanBytes({ displayPath, diskPath, source, opening }, state) {
   if (images) addFindings(state, checkMachO(displayPath, images), diskPath);
   if (elf) addFindings(state, checkElf(displayPath, elf), diskPath);
   if (pe) addFindings(state, checkPe(displayPath, pe), diskPath);
+  addFindings(state, checkHermes(displayPath, source), diskPath);
   // The same thing sits in each architecture's build and where two chunks overlap, and is
   // one finding. Keys are told apart by the search itself; the rest by what they say.
   const seenKeys = new Set();
@@ -505,16 +527,6 @@ function* readAsText(bytes, isText) {
   if (isText) return;
   yield utf16Text(bytes);
   yield utf16Text(bytes.subarray(1));
-}
-
-/**
- * Bytes read two to a character. Only whole pairs are decoded, which is what Node does with
- * a byte left over anyway. Node 24.21.0 on Linux and Windows corrupts its own memory when
- * it decodes an odd number of bytes that start at an odd place in their buffer, and the
- * reading that starts on the second byte of a stretch starts at just such a place.
- */
-function utf16Text(bytes) {
-  return bytes.subarray(0, bytes.length - (bytes.length % 2)).toString('utf16le');
 }
 
 /** Everything a finding quotes from a file is cleaned here; `diskPath` stays exact, for acting on the file. */

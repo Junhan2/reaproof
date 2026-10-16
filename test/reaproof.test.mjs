@@ -266,8 +266,10 @@ function buildSignature({ flags, entitlements = [], refused = [] }) {
  * the size of both its forms, unless `statedPackedBytes` gives the packed one). With
  * `isZip64` every size, offset and count is written the way an archive too large for the
  * four-byte fields writes them. Files given as a list of pairs may use one name twice.
+ * `beforeDirectory` goes between the files and the central directory, where an Android app
+ * package keeps its signature.
  */
-function buildZip(files, { isZip64 = false } = {}) {
+function buildZip(files, { isZip64 = false, beforeDirectory = Buffer.alloc(0) } = {}) {
   const parts = [];
   const directory = [];
   let offset = 0;
@@ -313,6 +315,8 @@ function buildZip(files, { isZip64 = false } = {}) {
     directory.push(Buffer.concat([entry, name, extra]));
     offset += local.length + name.length + packed.length;
   }
+  parts.push(beforeDirectory);
+  offset += beforeDirectory.length;
   const directoryBytes = directory.reduce((sum, part) => sum + part.length, 0);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
@@ -335,6 +339,166 @@ function buildZip(files, { isZip64 = false } = {}) {
   locator.writeBigUInt64LE(BigInt(offset + directoryBytes), 8);
   locator.writeUInt32LE(1, 16);
   return Buffer.concat([...parts, ...directory, record, locator, end]);
+}
+
+/**
+ * Writes an Android manifest in binary XML, as aapt does: a pool of strings, the resource IDs
+ * of the attribute names that have one, an element for `manifest`, one for `application` with
+ * the flags given, true or false, and its class when given, and an `activity` for each class given.
+ */
+function buildManifest({ appPackage = 'com.example.shop', application = {}, applicationName, activities = [] } = {}) {
+  const ATTRIBUTE_IDS = { debuggable: 0x0101000f, testOnly: 0x01010272, name: 0x01010003 };
+  const flags = Object.keys(application);
+  const classes = [...(applicationName ? [applicationName] : []), ...activities];
+  const withIds = [...flags, ...(classes.length > 0 ? ['name'] : [])];
+  // Names with a resource ID come first, in the order of the map that gives the IDs.
+  const strings = [...withIds, 'package', 'manifest', 'application', 'activity', appPackage, ...classes];
+  const index = (string) => strings.indexOf(string);
+  const texts = strings.map((string) => {
+    const bytes = Buffer.alloc(2 + string.length * 2 + 2);
+    bytes.writeUInt16LE(string.length, 0);
+    bytes.write(string, 2, 'utf16le');
+    return bytes;
+  });
+  const textBytes = texts.reduce((sum, { length }) => sum + length, 0);
+  const pool = Buffer.alloc(28 + strings.length * 4 + textBytes + ((4 - (textBytes % 4)) % 4));
+  pool.writeUInt16LE(0x0001, 0);
+  pool.writeUInt16LE(28, 2);
+  pool.writeUInt32LE(pool.length, 4);
+  pool.writeUInt32LE(strings.length, 8);
+  pool.writeUInt32LE(28 + strings.length * 4, 20);
+  let offset = 0;
+  texts.forEach((text, position) => {
+    pool.writeUInt32LE(offset, 28 + position * 4);
+    text.copy(pool, 28 + strings.length * 4 + offset);
+    offset += text.length;
+  });
+  const resourceMap = Buffer.alloc(8 + withIds.length * 4);
+  resourceMap.writeUInt16LE(0x0180, 0);
+  resourceMap.writeUInt16LE(8, 2);
+  resourceMap.writeUInt32LE(resourceMap.length, 4);
+  withIds.forEach((name, position) => resourceMap.writeUInt32LE(ATTRIBUTE_IDS[name], 8 + position * 4));
+  const element = (name, attributes) => {
+    const chunk = Buffer.alloc(36 + attributes.length * 20);
+    chunk.writeUInt16LE(0x0102, 0);
+    chunk.writeUInt16LE(16, 2);
+    chunk.writeUInt32LE(chunk.length, 4);
+    chunk.writeUInt32LE(0xffffffff, 12);
+    chunk.writeUInt32LE(0xffffffff, 16);
+    chunk.writeUInt32LE(index(name), 20);
+    chunk.writeUInt16LE(20, 24);
+    chunk.writeUInt16LE(20, 26);
+    chunk.writeUInt16LE(attributes.length, 28);
+    attributes.forEach(([nameIndex, rawValue, dataType, data], position) => {
+      const at = 36 + position * 20;
+      chunk.writeUInt32LE(0xffffffff, at);
+      chunk.writeUInt32LE(nameIndex, at + 4);
+      chunk.writeUInt32LE(rawValue, at + 8);
+      chunk.writeUInt16LE(8, at + 12);
+      chunk[at + 15] = dataType;
+      chunk.writeUInt32LE(data, at + 16);
+    });
+    return chunk;
+  };
+  const STRING = 0x03;
+  const BOOLEAN = 0x12;
+  const text = (attribute, value) => [index(attribute), index(value), STRING, index(value)];
+  const body = Buffer.concat([
+    pool,
+    resourceMap,
+    element('manifest', [text('package', appPackage)]),
+    element('application', [
+      ...flags.map((flag) => [index(flag), 0xffffffff, BOOLEAN, application[flag] ? 0xffffffff : 0]),
+      ...(applicationName ? [text('name', applicationName)] : []),
+    ]),
+    ...activities.map((activity) => element('activity', [text('name', activity)])),
+  ]);
+  const header = Buffer.alloc(8);
+  header.writeUInt16LE(0x0003, 0);
+  header.writeUInt16LE(8, 2);
+  header.writeUInt32LE(8 + body.length, 4);
+  return Buffer.concat([header, body]);
+}
+
+/**
+ * Writes an Android manifest in protobuf, as aapt2 does for an app bundle: a node whose element
+ * is `manifest` with its `package`, holding `application` with the flags given as compiled
+ * true-or-false values, and its class when given.
+ */
+function buildProtoManifest({ appPackage = 'com.example.shop', application = {}, applicationName } = {}) {
+  const varint = (number) => {
+    const bytes = [];
+    for (; number >= 0x80; number = Math.floor(number / 0x80)) bytes.push((number & 0x7f) | 0x80);
+    return Buffer.from([...bytes, number]);
+  };
+  // A field is its number and kind, then a number, or the length and the bytes of a string or a message.
+  const field = (number, value) =>
+    typeof value === 'number'
+      ? Buffer.concat([varint(number * 8), varint(value)])
+      : Buffer.concat([varint(number * 8 + 2), varint(Buffer.byteLength(value)), Buffer.from(value)]);
+  const ATTRIBUTE_IDS = { debuggable: 0x0101000f, testOnly: 0x01010272, name: 0x01010003 };
+  const attribute = (name, value) =>
+    field(4, Buffer.concat([
+      field(1, 'http://schemas.android.com/apk/res/android'),
+      field(2, name),
+      ...(typeof value === 'string' ? [field(3, value)] : []),
+      field(5, ATTRIBUTE_IDS[name]),
+      ...(typeof value === 'boolean' ? [field(6, field(7, field(8, value ? 1 : 0)))] : []),
+    ]));
+  const node = (name, attributes, children = []) =>
+    field(1, Buffer.concat([field(3, name), ...attributes, ...children.map((child) => field(5, child))]));
+  const applicationNode = node('application', [
+    ...Object.entries(application).map(([flag, isOn]) => attribute(flag, isOn)),
+    ...(applicationName ? [attribute('name', applicationName)] : []),
+  ]);
+  return node('manifest', [field(4, Buffer.concat([field(2, 'package'), field(3, appPackage)]))], [applicationNode]);
+}
+
+/** Writes a DEX file that defines one class for each descriptor: only the tables Reaproof reads. */
+function buildDex(descriptors) {
+  const count = descriptors.length;
+  const stringIdsAt = 0x70;
+  const typeIdsAt = stringIdsAt + count * 4;
+  const classDefsAt = typeIdsAt + count * 4;
+  let dataAt = classDefsAt + count * 32;
+  const dex = Buffer.alloc(dataAt + descriptors.reduce((sum, descriptor) => sum + descriptor.length + 2, 0));
+  dex.write('dex\n035\0', 0, 'latin1');
+  for (const [at, value] of [[0x38, count], [0x3c, stringIdsAt], [0x40, count], [0x44, typeIdsAt], [0x60, count], [0x64, classDefsAt]]) {
+    dex.writeUInt32LE(value, at);
+  }
+  descriptors.forEach((descriptor, position) => {
+    dex.writeUInt32LE(dataAt, stringIdsAt + position * 4);
+    dex.writeUInt32LE(position, typeIdsAt + position * 4);
+    dex.writeUInt32LE(position, classDefsAt + position * 32);
+    // Its length in UTF-16 units as one LEB128 byte, the text, and a zero.
+    dex[dataAt] = descriptor.length;
+    dex.write(descriptor, dataAt + 1, 'latin1');
+    dataAt += descriptor.length + 2;
+  });
+  return dex;
+}
+
+/** The header of Hermes bytecode, as React Native writes it, with what follows left empty. */
+function buildHermes({ version = 96, functions, strings }) {
+  const bytecode = Buffer.alloc(4096);
+  Buffer.from([0xc6, 0x1f, 0xbc, 0x03, 0xc1, 0x03, 0x19, 0x1f]).copy(bytecode);
+  bytecode.writeUInt32LE(version, 8);
+  bytecode.writeUInt32LE(bytecode.length, 32);
+  bytecode.writeUInt32LE(functions, 40);
+  bytecode.writeUInt32LE(strings, 52);
+  return bytecode;
+}
+
+/** An APK Signing Block that holds the given bytes, as the APK Signature Scheme v2 lays one out. */
+function signingBlock(contents) {
+  const pair = Buffer.alloc(12 + contents.length);
+  pair.writeBigUInt64LE(BigInt(4 + contents.length), 0);
+  pair.writeUInt32LE(0x7109871a, 8);
+  contents.copy(pair, 12);
+  const size = BigInt(pair.length + 8 + 16);
+  const front = Buffer.alloc(8);
+  front.writeBigUInt64LE(size, 0);
+  return Buffer.concat([front, pair, front, Buffer.from('APK Sig Block 42', 'latin1')]);
 }
 
 /** Wraps builds for several processors into one file, as in <mach-o/fat.h>. */
@@ -2791,6 +2955,114 @@ test('debug files are told by how they open, and the files of Flutter packages a
     ['stray-file', 'high', 'mapping.txt', 'debug-symbols'],
     ['unminified-code', 'medium', 'assets/flutter_assets/app.js', null],
     ['unminified-code', 'medium', 'site/packages/app.js', null],
+  ]);
+});
+
+test('an Android app that lets a debugger attach, is a test build or is signed with the debug key is reported', (t) => {
+  // The subject that Android's build tools give the debug key, as a certificate writes it.
+  const debugSubject = Buffer.concat([Buffer.from([0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x0d]), Buffer.from('Android Debug', 'latin1')]);
+  const releaseSubject = Buffer.concat([Buffer.from([0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x08]), Buffer.from('Shop Inc', 'latin1')]);
+  const code = { 'classes.dex': buildDex([]) };
+  const root = makeProject(t, {
+    'out/shop-debug.apk': buildZip({
+      'AndroidManifest.xml': buildManifest({ application: { debuggable: true, testOnly: true } }),
+      ...code,
+      // An older signature is a file of its own.
+      'META-INF/CERT.RSA': Buffer.concat([Buffer.alloc(40), debugSubject, Buffer.alloc(40)]),
+    }),
+    'out/shop-v2.apk': buildZip({ 'AndroidManifest.xml': buildManifest(), ...code }, { beforeDirectory: signingBlock(debugSubject) }),
+    'out/shop-release.apk': buildZip(
+      { 'AndroidManifest.xml': buildManifest({ application: { debuggable: false } }), ...code },
+      { beforeDirectory: signingBlock(releaseSubject) },
+    ),
+    // An app bundle keeps the base module's manifest in protobuf, and signs as an older APK does.
+    'out/shop-debug.aab': buildZip({
+      'BundleConfig.pb': Buffer.alloc(8),
+      'base/manifest/AndroidManifest.xml': buildProtoManifest({ application: { debuggable: true } }),
+      'base/dex/classes.dex': buildDex([]),
+      'META-INF/UPLOAD.RSA': Buffer.concat([Buffer.alloc(40), debugSubject, Buffer.alloc(40)]),
+    }),
+    'out/shop-release.aab': buildZip({
+      'BundleConfig.pb': Buffer.alloc(8),
+      'base/manifest/AndroidManifest.xml': buildProtoManifest({ application: { debuggable: false, testOnly: false } }),
+      'base/dex/classes.dex': buildDex([]),
+    }),
+  });
+
+  const findings = scan(join(root, 'out')).findings.map(({ rule, severity, path, detail }) => [rule, severity, path, detail.kinds, detail.appPackage]);
+  const { stdout } = runCli([join(root, 'out'), '--lang', 'en']);
+
+  assert.deepEqual(findings.sort(), [
+    ['android-debug-build', 'high', 'shop-debug.aab', ['debuggable', 'debug-certificate'], 'com.example.shop'],
+    ['android-debug-build', 'high', 'shop-debug.apk', ['debuggable', 'test-only', 'debug-certificate'], 'com.example.shop'],
+    ['android-debug-build', 'medium', 'shop-v2.apk', ['debug-certificate'], 'com.example.shop'],
+  ]);
+  assert.match(stdout, /anyone who connects the device over USB can attach a debugger/);
+  assert.match(stdout, /- shop-debug\.apk: com\.example\.shop · debuggable · test-only · debug-certificate/);
+});
+
+test('an Android app whose own classes keep their names is reported, and one R8 renamed is not', (t) => {
+  const descriptor = (name) => `L${name.replaceAll('.', '/')};`;
+  const own = (names) => names.map((name) => descriptor(`com.example.shop.${name}`));
+  const given = Array.from({ length: 60 }, (_, index) => `PriceRule${index}`);
+  // R8 renames to a letter or two; the build's own classes and the compiler's lambdas are no one's names.
+  const shortened = Array.from({ length: 40 }, (_, index) => String.fromCharCode(97 + (index % 26)) + (index >= 26 ? String(index) : ''));
+  const generated = ['R', 'R$id', 'BuildConfig', '-$$Lambda$Shop$1'];
+  // Android finds the classes the manifest names by those names, so R8 keeps them, and their
+  // inner classes are named after them: they say nothing of the build.
+  const screens = Array.from({ length: 55 }, (_, index) => `com.example.shop.Screen${index}Activity`);
+  const root = makeProject(t, {
+    // The classes of one app are counted across its DEX files.
+    'out/named.apk': buildZip({
+      'AndroidManifest.xml': buildManifest({ applicationName: 'com.example.shop.ShopApp' }),
+      'classes.dex': buildDex(own([...given.slice(0, 30), ...generated, 'ShopApp'])),
+      'classes2.dex': buildDex([...own(given.slice(30)), 'Lkotlin/Unit;']),
+    }),
+    'out/shortened.apk': buildZip({
+      'AndroidManifest.xml': buildManifest({ activities: screens }),
+      'classes.dex': buildDex([...own([...shortened, ...generated]), ...screens.flatMap((name) => [descriptor(name), descriptor(`${name}$onCreate$1`)])]),
+    }),
+    // A debug build may add a suffix to the application ID; the code stays in its own package.
+    'out/suffixed.apk': buildZip({
+      'AndroidManifest.xml': buildManifest({ appPackage: 'com.example.shop.debug', applicationName: 'com.example.shop.ShopApp' }),
+      'classes.dex': buildDex(own(given)),
+    }),
+    'out/named.aab': buildZip({
+      'BundleConfig.pb': Buffer.alloc(8),
+      'base/manifest/AndroidManifest.xml': buildProtoManifest(),
+      'base/dex/classes.dex': buildDex(own(given)),
+    }),
+  });
+
+  const findings = scan(join(root, 'out'))
+    .findings.map(({ rule, path, detail }) => [rule, path, detail.appPackage, detail.ownClasses, detail.namedClasses, detail.sample])
+    .sort();
+  const { stdout } = runCli([join(root, 'out'), '--lang', 'en']);
+
+  // The example is the first named class met, and the smaller DEX file is read first.
+  assert.deepEqual(findings, [
+    ['android-class-names', 'named.aab', 'com.example.shop', 60, 60, 'com.example.shop.PriceRule0'],
+    ['android-class-names', 'named.apk', 'com.example.shop', 60, 60, 'com.example.shop.PriceRule30'],
+    ['android-class-names', 'suffixed.apk', 'com.example.shop.debug', 60, 60, 'com.example.shop.PriceRule0'],
+  ]);
+  assert.match(stdout, /isMinifyEnabled = true/);
+});
+
+test('React Native code is read as JavaScript where it is, and noted where it is Hermes bytecode', (t) => {
+  const handwritten = Array.from({ length: 12 }, (_, index) => `export const rule${index} = (total) => total * 0.9;`).join('\n');
+  const root = makeProject(t, {
+    'out/script.apk': buildZip({ 'AndroidManifest.xml': buildManifest(), 'classes.dex': buildDex([]), 'assets/index.android.bundle': handwritten }),
+    // A build can give the bundle another name.
+    'out/renamed.apk': buildZip({ 'AndroidManifest.xml': buildManifest(), 'classes.dex': buildDex([]), 'assets/shop.android.bundle': handwritten }),
+    'out/Shop.app/main.jsbundle': buildHermes({ functions: 1234, strings: 5678 }),
+  });
+
+  const findings = scan(join(root, 'out')).findings.map(({ rule, path, detail }) => [rule, path, detail.functions ?? null, detail.strings ?? null]);
+
+  assert.deepEqual(findings.sort(), [
+    ['hermes-bytecode', 'Shop.app/main.jsbundle', 1234, 5678],
+    ['unminified-code', 'renamed.apk:/assets/shop.android.bundle', null, null],
+    ['unminified-code', 'script.apk:/assets/index.android.bundle', null, null],
   ]);
 });
 

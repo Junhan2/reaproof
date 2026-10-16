@@ -175,6 +175,7 @@ The path can be a build output folder, a packaged app, a single program, or an a
 | Source map files that contain your original source text | 🔴 Critical | Yes |
 | Source maps embedded inside code files | 🔴 Critical | No, turn it off in the build settings |
 | A program signed with an entitlement that opens it up while it runs: `get-task-allow` on macOS or iOS (high), `disable-library-validation` on macOS (medium) | 🟠 High or 🟡 medium | No, leave it out of release signing |
+| An Android app built for development: `android:debuggable` (high), `android:testOnly`, or signed with the debug key Android's build tools make (medium) | 🟠 High or 🟡 medium | No, build and sign a release build |
 | Source map files that list file names without the source text | 🟡 Medium | Yes |
 | A program that kept its development names: the names of its functions and variables, its debug information, and the paths of the original files on the machine that built it. macOS and iOS (Mach-O), Linux and Android (ELF), Windows (PE) | 🟡 Medium | No, strip the program before signing it |
 | A macOS program signed without the Hardened Runtime, or not signed at all | 🟡 Medium | No, turn it on when signing |
@@ -188,6 +189,8 @@ The path can be a build output folder, a packaged app, a single program, or an a
 | What a Go program keeps after stripping: the names of its functions, the paths of its source files, and build info that names its module and dependencies | 🔵 Note | In part: `-trimpath` takes out the folders of the machine that built it |
 | .NET assemblies, whose code reads back as C# with every type and method name | 🔵 Note | No, keep logic that must stay private on a server |
 | A Windows program whose debug file path names the home folder of the machine that built it | 🔵 Note | No, leave only the file name: `/PDBALTPATH:%_PDB%` for the MSVC linker, `PathMap` for .NET |
+| An Android app whose own classes keep the names they were given, which R8 would shorten | 🟡 Medium | No, turn on R8 (`isMinifyEnabled`) in the release build |
+| React Native code compiled to Hermes bytecode, which tools turn back into code close to JavaScript | 🔵 Note | No, keep logic that must stay private on a server |
 | Notes and scripts written for developers (`.md`, `.py`, `.sh` and the like) | 🔵 Note | A list to review; on a website each one gets a public address |
 | Server addresses named in the code, with any part shaped like a token shown as `…` | 🔵 Note | Cannot be hidden; a list to review |
 | Electron `.asar` archives, which anyone can unpack | 🔵 Note | No |
@@ -209,7 +212,7 @@ Every file under the path is read, whatever it is called. The exceptions are nam
 
 An archive is opened and each file in it is read as if it lay on disk. A ZIP archive is told by how it opens and not by its name, so `.zip`, `.ipa`, `.apk`, `.aab`, `.jar`, `.msix` and other files in that format are all read, and so is an Electron `.asar`. An archive inside an archive is opened too, three deep, and one nested deeper is named in the report. Nothing is unpacked to disk.
 
-- JavaScript, CSS, HTML, JSON and source map files are read whole, as UTF-8 or, when the file opens with its mark, UTF-16. JavaScript gets every check in the table above. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`. A source map over 30 MB is searched a piece at a time, for whether it holds source text and for values from `.env`, and its files are not counted.
+- JavaScript, CSS, HTML, JSON and source map files are read whole, as UTF-8 or, when the file opens with its mark, UTF-16. JavaScript gets every check in the table above, and so does the bundle React Native writes an app's code to (`index.android.bundle` and `main.jsbundle`, or another name the build gives it that ends in `.bundle` or `.jsbundle`) when it is JavaScript: with no zero byte in it, as Hermes bytecode has in its header. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`. A source map over 30 MB is searched a piece at a time, for whether it holds source text and for values from `.env`, and its files are not counted.
 - Every other file is searched for keys and `.env` values a piece at a time. A file with no zero byte anywhere in it is text, whatever it is called: there a key has to stand apart from what is around it, and a private key is reported, as in an Apple `.p8` key file left in an app.
 - Anything else is searched as bytes: programs, bytecode, data files. A key is found there also where strings are stored end to end with nothing between them, as Rust, Go and Hermes bytecode store them, and where text is kept two bytes to a character, as Windows programs keep it.
 - A Tauri app keeps its screen code (HTML, JavaScript) compressed inside its program. The program is read and rated, but that code is not, and the report says so under the count of files read. Check it in the project folder, where `npx reaproof` reads the build output (`dist` and the like) before it is packed.
@@ -232,6 +235,17 @@ Reaproof tells a native program by how the file opens, not by its name, and read
 - A .NET assembly is read for how many types and methods its metadata defines, and noted: a free decompiler turns it back into C# that reads almost as written.
 - A program built with Go keeps the names of its functions and the paths of its source files in its function table, and its module, dependencies and build settings in its build info, because it reads them while it runs. Reaproof notes how many there are, and whether the paths name a home folder; building with `-trimpath` makes them start at the module path. A file is taken for a Go program only when it holds Go's build info.
 - Every program is also searched for keys, and for Electron's fuse list, which sits in Electron's own binary on every system.
+
+## Android apps
+
+An `.apk` or an `.aab` is opened like any ZIP archive. When an app package (`.apk`) holds a manifest and DEX code at its top, or an app bundle (`.aab`) holds `BundleConfig.pb` and its base module's manifest, it is also read as an Android app, without running anything:
+
+- The manifest, which an app package keeps in binary XML and an app bundle in protobuf, for the app's package name, for `android:debuggable` and `android:testOnly` on its `application`, and for the classes it names: the application, activities, services, receivers and providers. A debuggable app lets anyone who connects the device attach a debugger to it.
+- The signature, for the debug key: the certificate Android's build tools make on each machine is issued to `CN=Android Debug,O=Android,C=US` (`CERTIFICATE_DESC` in AOSP's `KeystoreHelper.java`). It is looked for in the APK Signing Block, where apps signed since Android 7 keep their certificate, and in an older signature file under `META-INF`, which is how a bundle is signed.
+- The DEX files, for the classes of the app's own code: how many keep the name they were given (a capital and lower case, as a person names a class) and how many R8 or ProGuard shortened. The app's own code is under the package that its manifest's classes share with its package name, to which a debug build may add a suffix such as `.debug`. Not counted are the classes the build writes for every app (`R`, `BuildConfig`), the ones the compiler makes for lambdas, and the classes the manifest names with the classes inside them: Android finds those by name, so they keep it in any build. An app is reported from 50 named classes up, when they are at least half of its own.
+- Hermes bytecode, by the eight bytes it opens with, wherever it sits, for its version and how many functions and strings it holds.
+
+On real app packages, measured on 2026-10-16, with the counts checked against `aapt` and `dexdump`: Termux 0.118.3's debug build from its GitHub release was reported debuggable, as `aapt` says it is, with 209 of its 211 own classes named; Fossify Gallery 1.14.0 kept all 228 of its own classes named, Aegis 3.4.3 352 of 359 and NewPipe 0.29.1 1,122 of 1,202; Joplin 3.7.10 holds Hermes bytecode of version 96 with 71,791 functions, as its header reads with `od`. Bundles made from the Termux and Fossify packages with `aapt2 convert` and `bundletool build-bundle` were read the same, and `bundletool dump manifest` gives the same package names and `android:debuggable`. None of the seven apps tried was signed with the debug key (Termux signs its debug builds with a key of its own), and none had its classes shortened by R8. The debug key check was tried on a package signed with `jarsigner` by a key that `keytool` made with Android's debug subject, and an app that R8 shortened only on test packages made here.
 
 ## What the fixes change, measured
 
@@ -303,7 +317,7 @@ It runs one fixed release of rea, 6.5.0, the one this version was tested against
 - Server addresses and prompts inside a native program. Those two are looked for in JavaScript only.
 - Keys written in source map and CSS files. A map that embeds your sources is reported as critical by itself, but a key in those sources is not listed with it. A map embeds the sources of dependencies too, and their documentation carries example keys, so the two have to be told apart first.
 - Which certificate signed a macOS program. An ad-hoc or development signature is not told apart from a release one.
-- Android apps, beyond what any archive gets. An `.apk` is opened and its files are searched for keys, but nothing that is Android's own is checked, and there was no real APK to try even that on.
+- The settings of an Android app's network security or backups, and the names of methods and fields in DEX code: only class names are counted. Nor is an app's code outside its own package: an app built from many modules may keep most of it elsewhere (Thunderbird 24.0 keeps 16 classes under its package name and over 3,000 under others), and only those 16 are counted.
 - Dependencies in folders other than `node_modules`, `site-packages` and `dist-packages`. A Ruby gem folder or a copied-in library is read like your own files, so the notes, scripts and test keys of the libraries in it are reported as if they were yours.
 - Public-variable prefixes other than the nine listed above.
 - Very large files. A code or text file over 30 MB, any file over 512 MB inside an archive, and any other file over 1 GB are not read, and the report counts them as skipped. A source map over 30 MB is the exception: it is reported, without the count of its files.

@@ -70,8 +70,10 @@ export function isZip(opening) {
  *
  * @param {import('./bytes.mjs').ByteSource} source
  * @returns {{ root: ZipDirectory, list(directory: ZipDirectory): (ZipFile | ZipDirectory)[],
- *   read(file: ZipFile): Buffer }} `read` gives what an entry holds. One that holds more
- *   than it states is refused, and one that ends sooner comes back shorter
+ *   read(file: ZipFile): Buffer, directoryOffset: number }} `read` gives what an entry holds.
+ *   One that holds more than it states is refused, and one that ends sooner comes back
+ *   shorter. `directoryOffset` is where the central directory starts, which an Android app
+ *   package's signature ends right before
  * @throws when the bytes are not a ZIP archive this reader can list
  */
 export function openZip(source) {
@@ -129,6 +131,7 @@ export function openZip(source) {
     root,
     list: ({ directories, files }) => [...directories.values(), ...files],
     read: (file) => readEntry(source, file),
+    directoryOffset,
   };
 }
 
