@@ -2,7 +2,7 @@
 
 What changed in each release published to npm, newest first.
 
-## 0.7.0 (not published yet)
+## 0.7.0 (2026-10-17)
 
 - Reads Linux and Android programs (ELF) and Windows programs (PE) for the names and debug information a release should not keep, as it read Mac programs: the symbol table, and DWARF debug information with the original file names. A default `go build` on Linux kept 2,519 names that 0.6.0 did not report.
 - Notes a Windows program whose debug file path names a home folder of the machine that built it, and says how to leave only the file name. A `dotnet publish` from a home folder keeps such a path; with the `PathMap` property it did not.
