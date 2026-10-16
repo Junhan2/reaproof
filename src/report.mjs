@@ -158,6 +158,9 @@ const KO = {
         ...(formats.has('elf') || formats.has('pe')
           ? ['리눅스 · 안드로이드 · 윈도우 실행 파일은 strip 하거나 링크할 때 -s 를 주세요(Go 는 -ldflags="-s -w", Rust 는 release 프로필의 strip = true). 오류 기록을 풀 디버그 정보가 필요하면 먼저 따로 떼어 두세요(objcopy --only-keep-debug).']
           : []),
+        ...(formats.has('wasm')
+          ? ['WebAssembly 모듈은 Binaryen 의 wasm-opt --strip-debug 로 name 구역(함수 이름)과 디버그 정보를 떼세요.']
+          : []),
         `뗀 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다.${formats.has('mach-o') ? ' 직접 세어 보려면 nm --no-dyldinfo -a <파일> 을 쓰세요. 옵션 없는 nm 은 이름을 뗀 프로그램에 <redacted function N> 을 지어 붙입니다.' : ''}`,
       ],
     },
@@ -640,6 +643,9 @@ const EN = {
           : []),
         ...(formats.has('elf') || formats.has('pe')
           ? ['For a Linux, Android or Windows program, strip it or link with -s (Go: -ldflags="-s -w"; Rust: strip = true in the release profile). To keep debug information for crash reports, copy it out first (objcopy --only-keep-debug).']
+          : []),
+        ...(formats.has('wasm')
+          ? ['For a WebAssembly module, take out the name section (the function names) and the debug information with wasm-opt --strip-debug from Binaryen.']
           : []),
         `Run reaproof again afterwards: when this finding is gone, it worked.${formats.has('mach-o') ? ' To count the names yourself, use nm --no-dyldinfo -a <file>; plain nm adds entries of its own, <redacted function N>, to a stripped program.' : ''}`,
       ],

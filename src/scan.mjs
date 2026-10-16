@@ -17,8 +17,10 @@ import { checkPe, readPe } from './pe.mjs';
 import { isLinuxOrWindowsProgram } from './program.mjs';
 import { archiveFinding, checkFile, checkPath, hasContentChecks, isScript, isSourceMap, summarizeFindings } from './rules.mjs';
 import { checkRustSourcePaths, collectRustSourcePaths, startRustSourcePaths } from './rust.mjs';
+import { isTarName, openTar } from './tar.mjs';
 import { holdsTauriScreenCode } from './tauri.mjs';
 import { toShown, toShownText } from './text.mjs';
+import { checkWasm } from './wasm.mjs';
 import { isZip, openZip } from './zip.mjs';
 
 // Where JavaScript toolchains put what actually ships. For Next.js only `.next/static` reaches browsers.
@@ -62,6 +64,7 @@ const SCRIPT_BUNDLE = /\.(?:bundle|jsbundle)$/;
 // How a Linux and a Windows program open. Other files are not read for what those keep.
 const ELF_OPENING = '\x7fELF';
 const PE_OPENING = 'MZ';
+const WASM_OPENING = '\0asm';
 const FRAMEWORK_BY_PACKAGE = {
   next: 'next',
   vite: 'vite',
@@ -312,7 +315,7 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
     }
     addFindings(state, checkDebugFile({ path: displayPath, name, extension, readStart }), diskPath);
 
-    const openArchive = isText ? null : isZip(opening) ? openZip : extension === '.asar' ? openAsar : null;
+    const openArchive = isText ? null : isZip(opening) ? openZip : extension === '.asar' ? openAsar : isTarName(name) ? openTar : null;
     if (openArchive) {
       const depth = (within?.depth ?? 0) + 1;
       const budget = within?.budget ?? { left: MAX_UNPACKED_BYTES };
@@ -354,13 +357,14 @@ function openOnDisk(file, use) {
 }
 
 /**
- * @param {typeof openZip | typeof openAsar} openArchive
+ * @param {typeof openZip | typeof openAsar | typeof openTar} openArchive
  * @param {{ depth: number, budget: { left: number }, isAsar: boolean }} within what the files of this archive sit in
  */
 function scanArchive(openArchive, source, displayPath, within, state) {
   let archive;
   try {
-    archive = openArchive(source);
+    // What an archive unpacks to read itself counts against what may be read out of the outermost.
+    archive = openArchive(source, within.budget);
   } catch {
     state.result.unreadableArchives.push(displayPath);
     return;
@@ -450,7 +454,8 @@ function decodeText(bytes) {
  * and debug information it keeps, a Mach-O for its signature, a .NET assembly for what it
  * defines, and Electron's binary for its fuses. Any program is read for the paths of the
  * Rust source it was built from, for what Go keeps of its own, and for a Tauri app's screen.
- * Hermes bytecode is read for its header.
+ * Hermes bytecode is read for its header. A WebAssembly module is read for the names and debug
+ * information it keeps, and, as a program is, for Rust's and Go's paths.
  */
 function scanBytes({ displayPath, diskPath, source, opening }, state) {
   const images = readMachO(source);
@@ -460,11 +465,14 @@ function scanBytes({ displayPath, diskPath, source, opening }, state) {
   // An object file is a step of a build, not a program anyone runs.
   const isProgram = images?.some(({ kind }) => kind !== 'other') || isLinuxOrWindowsProgram(source);
   if (isProgram) state.result.programsScanned += 1;
+  // A WebAssembly module is compiled code too, and keeps the paths of Rust's and Go's sources as a program does.
+  const isWasm = openingText === WASM_OPENING;
 
   if (images) addFindings(state, checkMachO(displayPath, images), diskPath);
   if (elf) addFindings(state, checkElf(displayPath, elf), diskPath);
   if (pe) addFindings(state, checkPe(displayPath, pe), diskPath);
   addFindings(state, checkHermes(displayPath, source), diskPath);
+  if (isWasm) addFindings(state, checkWasm(displayPath, source), diskPath);
   // The same thing sits in each architecture's build and where two chunks overlap, and is
   // one finding. Keys are told apart by the search itself; the rest by what they say.
   const seenKeys = new Set();
@@ -484,11 +492,11 @@ function scanBytes({ displayPath, diskPath, source, opening }, state) {
       hasMoreBefore: chunk.position > 0,
       hasMoreAfter: chunk.position + chunk.bytes.length < source.byteLength,
     };
-    if (isProgram) {
+    if (isProgram || isWasm) {
       collectRustSourcePaths(chunk.bytes, place.hasMoreBefore, sourcePaths);
       collectGo(chunk, go);
-      holdsScreenCode ||= holdsTauriScreenCode(chunk.bytes);
     }
+    if (isProgram) holdsScreenCode ||= holdsTauriScreenCode(chunk.bytes);
     const inThisChunk = [checkElectronFuses(displayPath, source, chunk)];
     // The search for keys stops at its limit; the rest goes on to the end of the file.
     const wantsKeys = keys.length < MAX_KEYS_IN_A_FILE;

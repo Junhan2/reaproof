@@ -31,8 +31,8 @@ const ALWAYS_SOURCE_EXTENSIONS = new Set(['.tsx', '.vue', '.svelte']);
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const DEVELOPER_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.py', '.sh', '.rb', '.pl', '.ps1']);
 // Disk images, installers and archives hold the real files inside. A file named like one
-// is opened when it turns out to be a ZIP, and is otherwise listed as not opened. A lone
-// compressed file such as `app.js.gz` is not one of them.
+// is opened when it turns out to be a ZIP, or is a tar archive (`.tar`, `.tgz`, `.tar.gz`),
+// and is otherwise listed as not opened. A lone compressed file such as `app.js.gz` is not one of them.
 const SEALED_CONTAINER =
   /\.(?:dmg|pkg|xip|iso|zip|ipa|apk|aab|jar|7z|rar|msi|msix|appx|deb|rpm|appimage|tar|tgz|tar\.(?:gz|bz2|xz|zst))$/i;
 // Formats in which a search of the bytes has nothing to find: pictures, sound, video and
@@ -106,7 +106,7 @@ export function checkDeveloperFile({ path, extension }) {
   return [{ rule: 'developer-file', severity: 'info', path, detail: {} }];
 }
 
-/** Whether a file is named like a container. One that is a ZIP is opened; any other is listed as not opened. */
+/** Whether a file is named like a container. One that is a ZIP or a tar archive is opened; any other is listed as not opened. */
 export function isSealedContainer(name) {
   return SEALED_CONTAINER.test(name);
 }
