@@ -1152,7 +1152,7 @@ test('development fuses left on in an Electron binary are reported, whatever sys
   ]);
 });
 
-test('server addresses are listed as a note and a prompt in client code is flagged as a candidate', (t) => {
+test('server addresses are listed as a note, without the tokens in them, and a prompt in client code is flagged as a candidate', (t) => {
   const prompt =
     'You are the pricing assistant for the shop. Always quote the plus tier first and never reveal the ' +
     'hidden enterprise discount. If the user asks about refunds, say the window is fourteen days and nothing more.';
@@ -1160,6 +1160,8 @@ test('server addresses are listed as a note and a prompt in client code is flagg
     'package.json': '{}',
     'dist/app.js':
       'const api="https://api.example.test/v1";fetch("/api/orders");const about="https://example.test/about";' +
+      // A bot token in a path is no format Reaproof knows as a key, and is not shown all the same.
+      `fetch("https://api.example.test/bot7302948516:${'AAH9ab3xYqw8eR5tY2mn4bV6cX1pL0zkQ'}/sendMessage");` +
       `const systemPrompt=${JSON.stringify(prompt)};` +
       // A long library warning opens the same way but gives no orders to a model.
       `const warning=${JSON.stringify(`You are using an outdated build of this library. ${'Upgrade when convenient. '.repeat(8)}`)};`,
@@ -1170,7 +1172,7 @@ test('server addresses are listed as a note and a prompt in client code is flagg
   assert.deepEqual(
     result.findings.map(({ rule, severity, detail }) => [rule, severity, detail.addresses ?? detail.preview]),
     [
-      ['endpoint', 'info', ['https://api.example.test/v1', '/api/orders']],
+      ['endpoint', 'info', ['https://api.example.test/v1', 'https://api.example.test/…/sendMessage', '/api/orders']],
       ['prompt-candidate', 'medium', prompt.slice(0, 60)],
     ],
   );
@@ -1228,7 +1230,7 @@ test('programs built and signed by the real tools are read the way codesign read
   assert.equal(runtimeFinding.detail.slices[0].flags, codesignFlags);
 });
 
-test('measure tells a map that can be read from a pointer with no file behind it', (t) => {
+test('measure tells a map that can be read from a pointer with no file behind it, and shows no token in an address', (t) => {
   const root = makeProject(t, BUILT_PROJECT);
   const fakeRea = installFakeRea(t, {
     normalized_result: {
@@ -1246,6 +1248,7 @@ test('measure tells a map that can be read from a pointer with no file behind it
       semantic_graph: {
         nodes: [
           { kind: 'literal', properties: { value: 'https://api.example.test/v1' } },
+          { kind: 'literal', properties: { value: `https://discord.com/api/webhooks/730294851648291057/${'Zk9aB3xY7Qw8eR5tY2Mn'.repeat(3)}` } },
           { kind: 'literal', properties: { value: 'not a url' } },
           { kind: 'request' },
           { kind: 'function' },
@@ -1265,7 +1268,8 @@ test('measure tells a map that can be read from a pointer with no file behind it
       readableSourceMaps: 1,
       danglingMapReferences: 1,
       originalSources: ['../src/pricing.ts'],
-      urls: ['https://api.example.test/v1'],
+      // A webhook's token, the last part of its address, is not shown.
+      urls: ['https://api.example.test/v1', 'https://discord.com/api/webhooks/730294851648291057/…'],
       requests: 1,
       functions: 2,
     },
@@ -1520,6 +1524,128 @@ test('a key is found in the bytes of a program, also where strings sit end to en
     ],
   );
   assert.deepEqual([result.filesSeen, result.filesScanned, result.programsScanned], [5, 4, 2]);
+});
+
+test('the server keys of fifty more services are told by the prefixes they are issued with, in code and in programs', (t) => {
+  // Each key is put together here from its prefix and characters that only have its shape, so
+  // that no whole key is written in this file.
+  const run = (length, alphabet = 'Zk9aB3xY7Qw8eR5tY2Mn4bV6cX1pL0') =>
+    Array.from({ length }, (_, index) => alphabet[(index * 7 + 3) % alphabet.length]).join('');
+  const hex = (length) => run(length, '0123456789abcdef');
+  // Slack names a team and a webhook in capitals and digits.
+  const slackId = run(8, 'QW8ER5TY2MN4BV6CX1PL');
+  const keys = [
+    ['ai-api-key', ['sk', 'svcacct', run(40)].join('-')],
+    ['ai-api-key', ['sk', `${run(20)}${'T3Blbk'}FJ${run(20)}`].join('-')],
+    ['xai-key', ['xai', run(80)].join('-')],
+    ['groq-key', ['gsk', run(52)].join('_')],
+    ['openrouter-key', ['sk', 'or', 'v1', hex(64)].join('-')],
+    ['replicate-token', ['r8', run(37)].join('_')],
+    ['perplexity-key', ['pplx', run(48)].join('-')],
+    ['huggingface-token', ['hf', run(34, 'ZkaBxYQweRtMnbVcXpLsdfghjqu')].join('_')],
+    ['nvidia-key', ['nvapi', run(64)].join('-')],
+    ['pinecone-key', ['pcsk', run(6), run(60)].join('_')],
+    ['langsmith-key', ['lsv2', 'pt', hex(32), hex(10)].join('_')],
+    ['langfuse-secret', ['sk', 'lf', hex(8), hex(4), hex(4), hex(4), hex(12)].join('-')],
+    ['slack-token', ['xoxb', '7302948516', '4829105736281', run(24)].join('-')],
+    ['slack-webhook', `https://${['hooks', 'slack', 'com'].join('.')}/services/T0${slackId}/B0${slackId}/${run(24)}`],
+    ['discord-webhook', `https://${['discord', 'com'].join('.')}/api/webhooks/730294851648291057/${run(68)}`],
+    ['sendgrid-key', ['SG', run(22), run(43)].join('.')],
+    ['brevo-key', ['xkeysib', hex(64), run(16)].join('-')],
+    ['resend-key', ['re', run(8, 'Zk9aB3xY7Qw8eR5tY2Mn4bV6cX1pL'), run(24, 'Zk9aB3xY7Qw8eR5tY2Mn4bV6cX1pL')].join('_')],
+    ['webhook-secret', ['whsec', run(32)].join('_')],
+    ['shopify-token', ['shpat', hex(32)].join('_')],
+    ['square-token', ['sq0atp', run(22)].join('-')],
+    ['gitlab-token', ['glpat', run(20)].join('-')],
+    ['npm-token', ['npm', run(36)].join('_')],
+    ['pypi-token', ['pypi', `AgEIcHlwaS5vcmc${run(60)}`].join('-')],
+    ['rubygems-key', ['rubygems', hex(48)].join('_')],
+    ['docker-token', ['dckr', 'pat', run(27)].join('_')],
+    ['postman-key', ['PMAK', hex(24), hex(34)].join('-')],
+    ['linear-key', ['lin', 'api', run(40)].join('_')],
+    ['notion-token', ['ntn', `73029485164${run(35)}`].join('_')],
+    ['airtable-token', [`pat${run(14)}`, hex(64)].join('.')],
+    ['atlassian-token', ['ATATT3', run(186)].join('')],
+    ['contentful-token', ['CFPAT', run(43)].join('-')],
+    ['typeform-token', ['tfp', run(59)].join('_')],
+    ['supabase-access-token', ['sbp', run(40, 'k9ab3xy7qw8er5t2mn4v6c1pl0')].join('_')],
+    ['digitalocean-token', ['dop', 'v1', hex(64)].join('_')],
+    ['planetscale-token', ['pscale', 'tkn', run(32)].join('_')],
+    ['heroku-key', ['HRKU', `AA${run(58)}`].join('-')],
+    ['flyio-token', ['fo1', run(43)].join('_')],
+    ['deno-token', ['ddp', run(36)].join('_')],
+    ['databricks-token', ['dapi', hex(32)].join('')],
+    ['doppler-token', ['dp', 'pt', run(43)].join('.')],
+    ['vault-token', ['hvs', run(90)].join('.')],
+    ['tailscale-key', ['tskey', 'auth', run(12), run(32)].join('-')],
+    ['pulumi-token', ['pul', hex(40)].join('-')],
+    ['cloudflare-origin-ca-key', ['v1.0', hex(24), hex(146)].join('-')],
+    ['onepassword-token', ['ops', `eyJ${run(260)}`].join('_')],
+    ['age-key', ['AGE', 'SECRET', 'KEY', `1${run(58, 'QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L')}`].join('-')],
+    ['alibaba-access-key', ['LTAI', run(20)].join('')],
+    ['azure-key', ['AccountKey', `${run(86)}==`].join('=')],
+    ['sentry-token', ['sntryu', hex(64)].join('_')],
+    ['grafana-token', ['glsa', run(32), hex(8)].join('_')],
+    ['newrelic-key', ['NRAK', run(27)].join('-')],
+    ['dynatrace-token', ['dt0c01', run(24), run(64)].join('.')],
+    ['posthog-personal-key', ['phx', run(43)].join('_')],
+    ['mapbox-secret', ['sk', `eyJ${run(30)}`, run(30)].join('.')],
+  ];
+  const standIns = [
+    // The address Slack's own documentation shows, which ends in a run of X.
+    `https://${['hooks', 'slack', 'com'].join('.')}/services/T00000000/B00000000/${'X'.repeat(24)}`,
+    // The account key of Azure's storage emulator, which Microsoft publishes.
+    ['AccountKey', `Eby8vdM02xNOcqFlqUwJ${run(66)}==`].join('='),
+    ['npm', `EXAMPLE${run(29)}`].join('_'),
+    // A counting run, as sentry-cli's own help writes a token.
+    ['sntryu', '0123456789abcdef'.repeat(4)].join('_'),
+  ];
+  // Keys for publishing, deploying or running servers, and those with a short prefix, are
+  // looked for in text alone: in programs, names in the code spell such a prefix and more.
+  const textOnly = new Set([
+    'replicate-token', 'huggingface-token', 'langsmith-key', 'langfuse-secret', 'resend-key', 'gitlab-token', 'npm-token',
+    'pypi-token', 'rubygems-key', 'docker-token', 'postman-key', 'atlassian-token', 'contentful-token', 'typeform-token',
+    'supabase-access-token', 'digitalocean-token', 'planetscale-token', 'heroku-key', 'flyio-token', 'deno-token',
+    'databricks-token', 'doppler-token', 'vault-token', 'tailscale-key', 'pulumi-token', 'cloudflare-origin-ca-key',
+    'onepassword-token', 'age-key', 'alibaba-access-key', 'sentry-token', 'grafana-token', 'newrelic-key', 'dynatrace-token',
+    'posthog-personal-key', 'nvidia-key', 'pinecone-key', 'linear-key', 'notion-token', 'airtable-token', 'azure-key',
+  ]);
+  const values = [...keys.map(([, key]) => key), ...standIns];
+  const program = linuxProgram(65536);
+  program.write(values.join('\0'), 4096, 'latin1');
+  // Stored end to end, a key runs on into what was stored next, here a run of one letter, and is
+  // judged by what every key of its kind holds. Two webhooks of one kind are two findings.
+  const secondWebhook = `https://${['discord', 'com'].join('.')}/api/webhooks/481029573628104739/${run(68, 'Qw8eR5tY2Mn4bV6cX1pLZk9aB3xY7')}`;
+  const packed = linuxProgram(65536);
+  const inBytes = [...keys.filter(([id]) => !textOnly.has(id)).map(([, key]) => key), secondWebhook];
+  packed.write(inBytes.map((key) => `${key}${'A'.repeat(40)}\0`).join(''), 4096, 'latin1');
+  const root = makeProject(t, {
+    'dist/app.js': values.map((value, index) => `const k${index}="${value}";`).join('\n'),
+    'dist/server': program,
+    'dist/packed': packed,
+  });
+
+  const result = scan(join(root, 'dist'));
+  const found = (path) =>
+    result.findings
+      .filter((finding) => finding.rule === 'secret' && finding.path === path)
+      .map(({ detail }) => detail.secretId)
+      .sort();
+
+  const ids = keys.map(([id]) => id).sort();
+  assert.equal(new Set(ids).size, 54);
+  assert.deepEqual(found('app.js'), ids);
+  assert.deepEqual(found('server'), ids.filter((id) => !textOnly.has(id)));
+  assert.deepEqual(found('packed'), [...ids.filter((id) => !textOnly.has(id)), 'discord-webhook'].sort());
+  // A webhook address is a key too, and it is not listed whole among the server addresses.
+  const shown = JSON.stringify(result);
+  for (const [, key] of keys) assert.equal(shown.includes(key), false);
+  const webhooks = makeProject(t, { 'dist/hooks.js': keys.filter(([id]) => /webhook/.test(id)).map(([, key]) => `fetch("${key}");`).join('\n') });
+  const { stdout } = runCli([join(webhooks, 'dist'), '--lang', 'ko']);
+  // A webhook address is shown up to its secret, which is its last part.
+  assert.ok(stdout.includes(`- hooks.js: Slack 웹훅 주소 hooks.slack.com/services/T0${slackId}/B0${slackId}/…\n`));
+  assert.ok(stdout.includes('- hooks.js: Discord 웹훅 주소 discord.com/api/webhooks/730294851648291057/…\n'));
+  assert.match(stdout, /- hooks\.js: 웹훅 서명 비밀\(Stripe 등\) whsec_/);
 });
 
 test('every file that can hold text is read, on disk and inside an archive alike', (t) => {
