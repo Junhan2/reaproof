@@ -1,4 +1,5 @@
-// Checks that need only a name, so they also cover files too large or too binary to read.
+// Checks that need only a name, so they also cover files too large or too binary to read,
+// and one that also needs the first bytes of the file.
 
 const ENV_TEMPLATE_SUFFIX = /\.(?:example|sample|template|dist|defaults?)$/i;
 const KEY_FILE_NAMES = new Set(['id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', '.npmrc', '.netrc', '.htpasswd']);
@@ -10,6 +11,13 @@ const HARMLESS_DATABASE_NAMES = new Set(['Thumbs.db', 'build.db']);
 // The Finder writes a `.DS_Store` into each folder it shows, with the names of the files in it.
 // On a website anyone can fetch it, and with it the names of files nothing links to.
 const FINDER_DATA_NAME = '.DS_Store';
+// Debug information written beside a program: a PDB from Microsoft's compilers or from .NET,
+// told by how it opens because a protein structure on a science site has the same extension,
+// and the map R8 and ProGuard write from an Android app's shortened names back to its own.
+const PDB_OPENINGS = new Set(['Micr', 'BSJB']);
+const SHORTENED_NAMES_MAP = 'mapping.txt';
+const SHORTENED_NAMES_MAP_OPENING = /^# compiler: R8|^[\w$.]+ -> [\w$.]+:\r?$/m;
+const SHORTENED_NAMES_MAP_BYTES = 512;
 const STRAY_SEVERITY = {
   env: 'critical',
   git: 'critical',
@@ -45,6 +53,17 @@ const TEXTLESS_EXTENSIONS = new Set(
 export function checkStrayFile({ path, name, extension }) {
   const kind = strayFileKind(name, extension);
   return kind ? [strayFinding(path, kind)] : [];
+}
+
+/**
+ * Debug information that does not say so in its name alone.
+ *
+ * @param {{ path: string, name: string, extension: string, readStart: (bytes: number) => Buffer }} file
+ */
+export function checkDebugFile({ path, name, extension, readStart }) {
+  const isPdb = extension === '.pdb' && PDB_OPENINGS.has(readStart(4).toString('latin1'));
+  const isNamesMap = name === SHORTENED_NAMES_MAP && SHORTENED_NAMES_MAP_OPENING.test(readStart(SHORTENED_NAMES_MAP_BYTES).toString('latin1'));
+  return isPdb || isNamesMap ? [strayFinding(path, 'debug-symbols')] : [];
 }
 
 /** A whole directory that should never ship. It is reported once and not looked into. */

@@ -3,13 +3,16 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { openAsar } from './asar.mjs';
 import { fileBytes, lazyBytes, readChunks } from './bytes.mjs';
-import { checkStrayDirectory, isSealedContainer, isTextless, strayDirectoryKind } from './checks/paths.mjs';
+import { checkDebugFile, checkStrayDirectory, isSealedContainer, isTextless, strayDirectoryKind } from './checks/paths.mjs';
 import { checkSecrets, checkSecretsInBytes, MAX_KEYS_IN_A_FILE } from './checks/secrets.mjs';
 import { checkLargeMap, collectLargeMap, startLargeMap } from './checks/sourcemaps.mjs';
 import { checkElectronFuses } from './electron.mjs';
+import { checkElf, readElf } from './elf.mjs';
 import { checkEnvValues, readEnvSecrets } from './env.mjs';
+import { checkGo, collectGo, startGo } from './go.mjs';
 import { readMachO } from './macho.mjs';
 import { checkMachO } from './macos.mjs';
+import { checkPe, readPe } from './pe.mjs';
 import { isLinuxOrWindowsProgram } from './program.mjs';
 import { archiveFinding, checkFile, checkPath, hasContentChecks, isScript, isSourceMap, summarizeFindings } from './rules.mjs';
 import { checkRustSourcePaths, collectRustSourcePaths, startRustSourcePaths } from './rust.mjs';
@@ -47,6 +50,13 @@ export const CHUNK_BYTES = 896 * 1024;
 export const OVERLAP_BYTES = 64 * 1024;
 // Where JavaScript and Python keep the libraries a program is built on.
 const DEPENDENCY_FOLDERS = new Set(['node_modules', 'site-packages', 'dist-packages']);
+// Flutter keeps the files of the packages an app uses in `packages`, beside the manifests it
+// writes of the app's assets: in `flutter_assets` in an app, in `assets` in a web build.
+const FLUTTER_PACKAGES = 'packages';
+const FLUTTER_ASSET_MANIFESTS = new Set(['AssetManifest.bin', 'AssetManifest.json', 'FontManifest.json']);
+// How a Linux and a Windows program open. Other files are not read for what those keep.
+const ELF_OPENING = '\x7fELF';
+const PE_OPENING = 'MZ';
 const FRAMEWORK_BY_PACKAGE = {
   next: 'next',
   vite: 'vite',
@@ -286,13 +296,15 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
     if (within) within.budget.left -= source.byteLength;
     // A file inside an archive is unpacked by the first read of it, which is where one
     // that is locked or damaged shows.
+    const readStart = (bytes) => source.read(0, Math.min(source.byteLength, bytes));
     let opening;
     try {
-      opening = source.read(0, Math.min(source.byteLength, 4));
+      opening = readStart(4);
     } catch {
       result.unreadableFiles.push(displayPath);
       return;
     }
+    addFindings(state, checkDebugFile({ path: displayPath, name, extension, readStart }), diskPath);
 
     const openArchive = isText ? null : isZip(opening) ? openZip : extension === '.asar' ? openAsar : null;
     if (openArchive) {
@@ -308,7 +320,7 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
       result.filesScanned += 1;
       if (isReadWhole) scanText({ displayPath, extension, diskPath, source }, state);
       else if (isLargeMap) scanLargeMap({ displayPath, diskPath, source }, state);
-      else scanBytes({ displayPath, diskPath, source }, state);
+      else scanBytes({ displayPath, diskPath, source, opening }, state);
     }
   });
   if (!wasOpened) result.unreadableFiles.push(displayPath);
@@ -414,17 +426,23 @@ function decodeText(bytes) {
 /**
  * A file whose name does not say it is code is searched for keys a chunk at a time: a
  * program, bytecode, a data file, a script, a note. A native program has no file name to go
- * by and is known by how it opens. A Mach-O is also read for what it says about its own
- * names and signature, and Electron's binary for its fuses. Any program is read for the
- * paths of the Rust source it was built from, and for a Tauri app's screen inside it.
+ * by and is known by how it opens. A Mach-O, ELF or PE program is also read for the names
+ * and debug information it keeps, a Mach-O for its signature, a .NET assembly for what it
+ * defines, and Electron's binary for its fuses. Any program is read for the paths of the
+ * Rust source it was built from, for what Go keeps of its own, and for a Tauri app's screen.
  */
-function scanBytes({ displayPath, diskPath, source }, state) {
+function scanBytes({ displayPath, diskPath, source, opening }, state) {
   const images = readMachO(source);
+  const openingText = opening.toString('latin1');
+  const elf = openingText === ELF_OPENING ? readElf(source) : null;
+  const pe = openingText.startsWith(PE_OPENING) ? readPe(source) : null;
   // An object file is a step of a build, not a program anyone runs.
   const isProgram = images?.some(({ kind }) => kind !== 'other') || isLinuxOrWindowsProgram(source);
   if (isProgram) state.result.programsScanned += 1;
 
   if (images) addFindings(state, checkMachO(displayPath, images), diskPath);
+  if (elf) addFindings(state, checkElf(displayPath, elf), diskPath);
+  if (pe) addFindings(state, checkPe(displayPath, pe), diskPath);
   // The same thing sits in each architecture's build and where two chunks overlap, and is
   // one finding. Keys are told apart by the search itself; the rest by what they say.
   const seenKeys = new Set();
@@ -437,6 +455,7 @@ function scanBytes({ displayPath, diskPath, source }, state) {
   const isText = !holdsZeroByte(source);
   const findKeys = isText ? checkSecrets : checkSecretsInBytes;
   const sourcePaths = startRustSourcePaths();
+  const go = startGo();
   let holdsScreenCode = false;
   for (const chunk of readChunks(source, CHUNK_BYTES, OVERLAP_BYTES)) {
     const place = {
@@ -445,6 +464,7 @@ function scanBytes({ displayPath, diskPath, source }, state) {
     };
     if (isProgram) {
       collectRustSourcePaths(chunk.bytes, place.hasMoreBefore, sourcePaths);
+      collectGo(chunk, go);
       holdsScreenCode ||= holdsTauriScreenCode(chunk.bytes);
     }
     const inThisChunk = [checkElectronFuses(displayPath, source, chunk)];
@@ -462,7 +482,8 @@ function scanBytes({ displayPath, diskPath, source }, state) {
     for (const finding of inThisChunk.flat()) others.set(JSON.stringify(finding), finding);
   }
   if (holdsScreenCode) state.result.unreadScreenCode.push(displayPath);
-  const notes = checkRustSourcePaths(displayPath, sourcePaths);
+  const reading = { chunkBytes: CHUNK_BYTES, overlapBytes: OVERLAP_BYTES };
+  const notes = [...checkRustSourcePaths(displayPath, sourcePaths), ...checkGo(displayPath, source, go, reading)];
   addFindings(state, [...keys.slice(0, MAX_KEYS_IN_A_FILE), ...others.values(), ...notes], diskPath);
 }
 
@@ -519,8 +540,11 @@ function* walk(entry, list) {
     yield current;
     // A directory that should never ship is reported whole and not looked into.
     if (!current.isDirectory || strayDirectoryKind(current.name) !== null) continue;
+    const listed = list(current);
     // Dependencies are public code, and their docs and tests carry example keys.
-    const children = list(current).filter((child) => !(child.isDirectory && DEPENDENCY_FOLDERS.has(child.name)));
+    const holdsFlutterAssets = listed.some(({ name, isDirectory }) => !isDirectory && FLUTTER_ASSET_MANIFESTS.has(name));
+    const isDependency = ({ name }) => DEPENDENCY_FOLDERS.has(name) || (name === FLUTTER_PACKAGES && holdsFlutterAssets);
+    const children = listed.filter((child) => !(child.isDirectory && isDependency(child)));
     // The last one in is the next one out, so they go in backwards to come out as listed.
     for (let index = children.length - 1; index >= 0; index -= 1) toVisit.push(children[index]);
   }

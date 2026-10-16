@@ -62,3 +62,33 @@ export function* readChunks(source, chunkBytes, overlapBytes) {
     yield { position, bytes: source.read(position, length) };
   }
 }
+
+const RECORDS_PER_READ = 65536;
+
+/**
+ * A table of records of one size, a block of them at a time, so that a table of millions is
+ * never held whole.
+ *
+ * @param {(position: number, length: number) => Buffer} read
+ * @returns {Generator<Buffer>}
+ */
+export function* readRecords(read, offset, count, recordBytes) {
+  for (let first = 0; first < count; first += RECORDS_PER_READ) {
+    yield read(offset + first * recordBytes, Math.min(RECORDS_PER_READ, count - first) * recordBytes);
+  }
+}
+
+/** @returns {string} the text up to the first zero byte, or all of it when there is none */
+export function textBeforeZero(bytes, encoding) {
+  const end = bytes.indexOf(0);
+  return bytes.toString(encoding, 0, end === -1 ? bytes.length : end);
+}
+
+/** @returns what `read` returns, or null when what it reads does not hold what it should */
+export function unlessMalformed(read) {
+  try {
+    return read();
+  } catch {
+    return null;
+  }
+}

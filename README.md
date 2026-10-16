@@ -169,14 +169,14 @@ The path can be a build output folder, a packaged app, a single program, or an a
 
 | Finding | Severity | Automatic fix |
 | --- | --- | --- |
-| Settings files (`.env`), a `.git` folder, key stores, database files and debug symbols mixed into the output | 🔴 Critical or 🟠 high | No, take them out and stop them being copied in. Keep debug symbols, somewhere else |
+| Settings files (`.env`), a `.git` folder, key stores, database files and debug symbols (`.dSYM`, a `.pdb`, an R8 `mapping.txt`) mixed into the output | 🔴 Critical or 🟠 high | No, take them out and stop them being copied in. Keep debug symbols, somewhere else |
 | Server-only keys in shipped files, whether code, a script, a settings file of any name, a native program or bytecode: Stripe secret and restricted keys, Supabase secret and `service_role` keys, GitHub tokens, AWS access keys, private keys, AI service keys, database addresses that carry a password | 🔴 Critical or 🟠 high | No, revoke the key and move it to a server |
 | A secret value from the project's own `.env` that appears word for word in any shipped file | 🔴 Critical or 🟠 high | No, change the value and move it to a server |
 | Source map files that contain your original source text | 🔴 Critical | Yes |
 | Source maps embedded inside code files | 🔴 Critical | No, turn it off in the build settings |
 | A program signed with an entitlement that opens it up while it runs: `get-task-allow` on macOS or iOS (high), `disable-library-validation` on macOS (medium) | 🟠 High or 🟡 medium | No, leave it out of release signing |
 | Source map files that list file names without the source text | 🟡 Medium | Yes |
-| A macOS or iOS program that kept its development names: the names of its functions and variables, and the paths of the original files on the machine that built it | 🟡 Medium | No, strip the program before signing it |
+| A program that kept its development names: the names of its functions and variables, its debug information, and the paths of the original files on the machine that built it. macOS and iOS (Mach-O), Linux and Android (ELF), Windows (PE) | 🟡 Medium | No, strip the program before signing it |
 | A macOS program signed without the Hardened Runtime, or not signed at all | 🟡 Medium | No, turn it on when signing |
 | A packaged Electron app with development fuses left on (`runAsNode`, `nodeOptions`, `nodeCliInspect`) | 🟡 Medium | No, turn them off with `@electron/fuses` |
 | Source and test files packed into the app or output | 🟡 Medium | No, take them out of the packaging list |
@@ -185,6 +185,9 @@ The path can be a build output folder, a packaged app, a single program, or an a
 | Code that is not minified | 🟡 Medium | No, turn on minification |
 | Names that stay in a macOS or iOS program after stripping: Swift types, properties and enum cases, Objective-C classes and methods | 🔵 Note | In part: a build setting leaves out the names of Swift properties and cases, at a price. See "Native programs" |
 | Paths of Rust source files that a program keeps as text after stripping: its own files, and those of its dependencies, which can name the home folder of the machine that built it | 🔵 Note | In part: `--remap-path-prefix` replaces the home folder. See "Native programs" |
+| What a Go program keeps after stripping: the names of its functions, the paths of its source files, and build info that names its module and dependencies | 🔵 Note | In part: `-trimpath` takes out the folders of the machine that built it |
+| .NET assemblies, whose code reads back as C# with every type and method name | 🔵 Note | No, keep logic that must stay private on a server |
+| A Windows program whose debug file path names the home folder of the machine that built it | 🔵 Note | No, leave only the file name: `/PDBALTPATH:%_PDB%` for the MSVC linker, `PathMap` for .NET |
 | Notes and scripts written for developers (`.md`, `.py`, `.sh` and the like) | 🔵 Note | A list to review; on a website each one gets a public address |
 | Server addresses named in the code | 🔵 Note | Cannot be hidden; a list to review |
 | Electron `.asar` archives, which anyone can unpack | 🔵 Note | No |
@@ -195,7 +198,7 @@ For the `.env` comparison, Reaproof reads the `.env` files of the project the pa
 
 ## How files are read
 
-Every file under the path is read, whatever it is called. The exceptions are named in the report: containers that are not opened, and pictures, sound, video, fonts and compressed files, in which there is nothing to find. `node_modules` is not entered, and neither are Python's `site-packages` and `dist-packages`, because dependencies are public code. Code of your own installed into one of them as a package is passed over with them.
+Every file under the path is read, whatever it is called. The exceptions are named in the report: containers that are not opened, and pictures, sound, video, fonts and compressed files, in which there is nothing to find. `node_modules` is not entered, and neither are Python's `site-packages` and `dist-packages` nor the `packages` folder beside Flutter's asset manifests, in an app or a web build, because dependencies are public code. Code of your own installed into one of them as a package is passed over with them.
 
 An archive is opened and each file in it is read as if it lay on disk. A ZIP archive is told by how it opens and not by its name, so `.zip`, `.ipa`, `.apk`, `.aab`, `.jar`, `.msix` and other files in that format are all read, and so is an Electron `.asar`. An archive inside an archive is opened too, three deep, and one nested deeper is named in the report. Nothing is unpacked to disk.
 
@@ -217,7 +220,11 @@ Reaproof tells a native program by how the file opens, not by its name, and read
 - The numbers come from the symbol table itself, for the processor's build that has the most names. Apple's `nm` adds entries of its own for a stripped program (`<redacted function 1>` and so on), so to compare, run `nm --no-dyldinfo`.
 - Keep the debug information (`.dSYM`) before you strip, outside what ships. It is what makes crash reports readable.
 - A program built with Rust keeps the path of each source file in which it can stop on an error, as text that `strip` leaves alone. On any system, Reaproof lists them as a note: how many files are the program's own and how many are its dependencies', and whether a path names the home folder of the machine that built it. A program without Rust's standard library in it is not taken for a Rust one. `rustc --remap-path-prefix=<home folder>=~`, given in `RUSTFLAGS` or in `build.rustflags` of `.cargo/config.toml`, replaces that folder; the program's own file names cannot be left out with a stable Rust setting.
-- A Windows or Linux program is searched for keys, and for Electron's fuse list, which sits in Electron's own binary on every system.
+- A Linux or Android program (ELF) is read for its symbol table and debug information (DWARF), with the same rule as a Mac program: every name a program defines counts, and for a library only the names it does not export. The names of the original files and folders come from the debug information, unpacked where a compiler compressed it with zlib.
+- A Windows program (PE) is read for its COFF symbol table, which MinGW and Go write and Microsoft's linker does not, and for the path of its debug file (the PDB). A path that names a home folder, such as `C:\Users\<name>\`, is noted: a `dotnet publish` from a home folder keeps one, and the `PathMap` property takes it out. A file name alone, as `rg.pdb`, is not noted. The `.pdb` files themselves are reported when they ship, told by how they open: a protein structure on a science site has the same extension.
+- A .NET assembly is read for how many types and methods its metadata defines, and noted: a free decompiler turns it back into C# that reads almost as written.
+- A program built with Go keeps the names of its functions and the paths of its source files in its function table, and its module, dependencies and build settings in its build info, because it reads them while it runs. Reaproof notes how many there are, and whether the paths name a home folder; building with `-trimpath` makes them start at the module path. A file is taken for a Go program only when it holds Go's build info.
+- Every program is also searched for keys, and for Electron's fuse list, which sits in Electron's own binary on every system.
 
 ## What the fixes change, measured
 
@@ -283,9 +290,9 @@ It runs one fixed release of rea, 6.5.0, the one this version was tested against
 ## Not covered yet
 
 - Disk images, installers and archives that are not ZIP (`.dmg`, `.pkg`, `.7z`, `.rar`, `.tar`, `.tar.gz` and the like). They are not opened. The report lists them as unread; point Reaproof at the app or folder inside. For a `.dmg` it says how to open one. A ZIP with something in front of it, as a self-extracting program or a `.crx` has, is not opened either.
-- Names and signatures of Windows and Linux programs. They are searched for keys, for Electron's fuses and for Rust's source paths, nothing more.
+- Signatures of Windows and Linux programs: whether a Windows program is signed (Authenticode), or which certificate signed one, is not checked.
 - The screen code inside a Tauri app. The report names the program it sits in; point Reaproof at the build output in the project folder instead.
-- Source paths that programs built with Go, C or C++ keep as text. Rust's are the ones listed.
+- Source paths that programs built with C or C++ keep as text outside their debug information. Those of Rust and Go are the ones listed.
 - Server addresses and prompts inside a native program. Those two are looked for in JavaScript only.
 - Keys written in source map and CSS files. A map that embeds your sources is reported as critical by itself, but a key in those sources is not listed with it. A map embeds the sources of dependencies too, and their documentation carries example keys, so the two have to be told apart first.
 - Which certificate signed a macOS program. An ad-hoc or development signature is not told apart from a release one.
@@ -300,7 +307,7 @@ It runs one fixed release of rea, 6.5.0, the one this version was tested against
 npm test
 ```
 
-No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files and archives and run anywhere; each change is run on Linux, macOS and Windows with Node 18, 20, 22 and 24. Four more tests use the system's own tools where they are there. On a Mac with `clang` and `codesign`, two build, sign and strip throwaway programs, never start them, and check that Reaproof reads them the way `codesign` does and that `strip` takes out what was reported. Where `zip` is installed, one checks that an archive it wrote is read the same as the folder it was made from. Where `cargo` is installed, one builds a small Rust program, never starts it, and checks that the paths of its own two source files are what the note counts.
+No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files and archives and run anywhere; each change is run on Linux, macOS and Windows with Node 18, 20, 22 and 24. Five more tests use the system's own tools where they are there. On a Mac with `clang` and `codesign`, two build, sign and strip throwaway programs, never start them, and check that Reaproof reads them the way `codesign` does and that `strip` takes out what was reported. Where `zip` is installed, one checks that an archive it wrote is read the same as the folder it was made from. Where `cargo` is installed, one builds a small Rust program, never starts it, and checks that the paths of its own two source files are what the note counts. Where `go` is installed, one builds a small Go program twice, as built and with `-trimpath -ldflags="-s -w"`, never starts them, and checks the note against what `go version -m` says, and that only the first keeps a symbol table.
 
 The picture at the top is a run recorded in a real terminal with `docs/tools/capture.py` and drawn with `docs/tools/render-svg.mjs`. Each script says at its top how it is run.
 

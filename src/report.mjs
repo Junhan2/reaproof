@@ -25,7 +25,7 @@ const LEVEL_SEPARATOR = ' · ';
 // Projects that make an app to install, whose output is no website to check at an address.
 const APP_FRAMEWORKS = ['electron', 'tauri'];
 // The numbers of one file a rule's explanation speaks of: the file with the most of them.
-const FULLEST_COUNTS = ['names', 'types', 'members', 'ownFiles', 'dependencyFiles'];
+const FULLEST_COUNTS = ['names', 'types', 'members', 'ownFiles', 'dependencyFiles', 'functions', 'dependencies', 'methods'];
 // Terminal styles by the names Node's own `util.inspect.colors` gives them.
 const SEVERITY_STYLES = { critical: ['red', 'bold'], high: ['red'], medium: ['yellow'], info: ['cyan'] };
 const RISK_COLORS = { 'very-high': 'red', high: 'red', moderate: 'yellow', baseline: 'green', unrated: 'magenta' };
@@ -68,6 +68,10 @@ const KO = {
   typesIn: (architecture, count) => `${architecture}: 타입 이름 ${count}개`,
   membersIn: (count) => `속성·메서드 이름 ${count}개`,
   ownFilesIn: (count) => `앱 자신의 파일 ${count}개`,
+  functionsIn: (count) => `함수 이름 ${count}개`,
+  methodsIn: (count) => `메서드 ${count}개`,
+  typeCountIn: (count) => `형식 ${count}개`,
+  debugFileIn: (path) => `디버그 파일 ${path}`,
   dependencyFilesIn: (count) => `의존 라이브러리 ${count}개`,
   forExample: (sample) => `예: ${sample}`,
   // Listed roughly from most to least damaging. A report shows the kinds it found worst
@@ -84,7 +88,7 @@ const KO = {
           : []),
         '배포물에서 빼고, 어디서 섞여 들어오는지(예: 통째로 복사되는 폴더, 묶을 파일 목록) 확인하세요.',
         ...(kinds.has('debug-symbols')
-          ? ['디버그 정보(.dSYM)는 지우지 말고 배포물 밖에 보관하세요. 사용자에게서 온 오류 기록을 풀 때 씁니다.']
+          ? ['디버그 정보(.dSYM, .pdb, mapping.txt)는 지우지 말고 배포물 밖에 보관하세요. 사용자에게서 온 오류 기록을 풀 때 씁니다.']
           : []),
       ],
     },
@@ -137,14 +141,22 @@ const KO = {
     },
     'native-symbols': {
       title: '실행 파일에 개발할 때 쓰는 이름표가 그대로 남아 있습니다',
-      body: ({ files, names, sources, builders }) => [
+      body: ({ files, names, sources, builders, formats, debugInfo }) => [
         `실행 파일 ${files}개에 함수와 변수 이름이 남아 있습니다(가장 많은 파일에 ${names}개). 코드가 무슨 일을 하는지 이름만으로 읽힙니다.`,
+        ...(debugInfo > 0 ? ['디버그 정보(DWARF)가 든 것도 있어, 원본 파일과 줄 번호, 그 안의 변수 이름까지 적혀 있습니다.'] : []),
         ...(builders > 0 ? ['원본 파일의 경로도 들어 있어, 빌드한 컴퓨터의 계정 이름과 폴더 구조가 그대로 보입니다.'] : []),
         ...(sources > 0 && builders === 0 ? ['원본 파일의 경로도 들어 있어, 코드의 폴더 구조가 그대로 보입니다.'] : []),
-        '서명하기 전에 strip 으로 떼세요. 실행 파일은 옵션 없는 strip 이 이름을 모두 떼고, 다른 파일이 불러 쓰는 라이브러리는 strip -x 가 밖에서 쓰는 이름만 남깁니다. strip -S 는 경로와 디버그 표식만 뗍니다.',
-        'Xcode 로 빌드한다면 Strip Linked Product(STRIP_INSTALLED_PRODUCT)와 Strip Style(STRIP_STYLE) 설정이 이 일을 합니다. 다만 Deployment Postprocessing(DEPLOYMENT_POSTPROCESSING)이 켜진 빌드에서만 뗍니다.',
-        '떼기 전에 디버그 정보(.dSYM)를 배포물 밖에 보관해 두면 오류 기록은 계속 풀 수 있습니다.',
-        '뗀 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다. 직접 세어 보려면 nm --no-dyldinfo -a <파일> 을 쓰세요. 옵션 없는 nm 은 이름을 뗀 프로그램에 <redacted function N> 을 지어 붙입니다.',
+        ...(formats.has('mach-o')
+          ? [
+              '서명하기 전에 strip 으로 떼세요. 실행 파일은 옵션 없는 strip 이 이름을 모두 떼고, 다른 파일이 불러 쓰는 라이브러리는 strip -x 가 밖에서 쓰는 이름만 남깁니다. strip -S 는 경로와 디버그 표식만 뗍니다.',
+              'Xcode 로 빌드한다면 Strip Linked Product(STRIP_INSTALLED_PRODUCT)와 Strip Style(STRIP_STYLE) 설정이 이 일을 합니다. 다만 Deployment Postprocessing(DEPLOYMENT_POSTPROCESSING)이 켜진 빌드에서만 뗍니다.',
+              '떼기 전에 디버그 정보(.dSYM)를 배포물 밖에 보관해 두면 오류 기록은 계속 풀 수 있습니다.',
+            ]
+          : []),
+        ...(formats.has('elf') || formats.has('pe')
+          ? ['리눅스 · 안드로이드 · 윈도우 실행 파일은 strip 하거나 링크할 때 -s 를 주세요(Go 는 -ldflags="-s -w", Rust 는 release 프로필의 strip = true). 오류 기록을 풀 디버그 정보가 필요하면 먼저 따로 떼어 두세요(objcopy --only-keep-debug).']
+          : []),
+        `뗀 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다.${formats.has('mach-o') ? ' 직접 세어 보려면 nm --no-dyldinfo -a <파일> 을 쓰세요. 옵션 없는 nm 은 이름을 뗀 프로그램에 <redacted function N> 을 지어 붙입니다.' : ''}`,
       ],
     },
     'macos-runtime': {
@@ -204,6 +216,34 @@ const KO = {
             ]
           : []),
         '앱 자신의 파일 이름은 정식 Rust 설정으로는 뺄 수 없습니다. 숨겨야 할 로직은 서버로 옮기세요.',
+      ],
+    },
+    'go-program': {
+      title: 'Go 로 만든 실행 파일에 함수 이름과 원본 경로가 남아 있습니다',
+      body: ({ files, functions, ownFiles, dependencyFiles, dependencies, builders }) => [
+        functions > 0
+          ? `Go 로 만든 실행 파일이 ${files}개 있습니다. 가장 많은 파일에 함수 이름 ${functions}개(Go 런타임의 것 포함)와 앱 자신의 원본 파일 ${ownFiles}개, 의존 라이브러리 파일 ${dependencyFiles}개의 경로가 들어 있습니다. 오류가 난 곳을 보여 주려고 Go 가 넣는 것이라 strip 이나 -ldflags="-s -w" 로는 빠지지 않습니다.`
+          : `Go 로 만든 실행 파일이 ${files}개 있습니다. 오류가 난 곳을 보여 주려고 Go 가 함수 이름과 원본 파일 경로를 넣어 두므로 strip 이나 -ldflags="-s -w" 로는 빠지지 않습니다.`,
+        `빌드 정보에는 모듈 이름과 의존 모듈 ${dependencies}개의 판까지 적혀 있습니다(go version -m <파일> 로 볼 수 있음).`,
+        ...(builders > 0
+          ? ['경로에 빌드한 컴퓨터의 홈 폴더가 들어 있어 계정 이름이 보입니다. -trimpath 를 주고 빌드하면 경로가 모듈 이름부터 시작합니다.']
+          : []),
+        '함수 이름은 Go 설정으로 뺄 수 없습니다. 숨겨야 할 로직은 서버로 옮기세요.',
+      ],
+    },
+    'dotnet-code': {
+      title: '.NET 어셈블리는 원본 코드처럼 되살아납니다',
+      body: ({ files, types, methods }) => [
+        `.NET 어셈블리 ${files}개에 코드가 IL 로, 모든 형식과 메서드의 이름과 함께 들어 있습니다(가장 많은 파일에 형식 ${types}개, 메서드 ${methods}개). ILSpy 같은 무료 디컴파일러가 거의 쓴 그대로의 C# 으로 되돌립니다.`,
+        '숨겨야 할 로직은 서버로 옮기세요.',
+      ],
+    },
+    'debug-file-path': {
+      title: '윈도우 실행 파일에 빌드한 컴퓨터의 폴더 경로가 남아 있습니다',
+      body: ({ files }) => [
+        `윈도우 실행 파일 ${files}개에 적힌 디버그 파일(.pdb) 경로에 빌드한 컴퓨터의 홈 폴더가 들어 있습니다. 계정 이름과 폴더 구조가 보입니다.`,
+        '디버그 파일 경로에는 파일 이름만 남기세요. MSVC 링커는 /PDBALTPATH:%_PDB%, .NET 은 PathMap 속성이 그 일을 합니다.',
+        '고친 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다.',
       ],
     },
     'developer-file': {
@@ -417,6 +457,10 @@ const EN = {
   typesIn: (architecture, count) => `${architecture}: ${count} type names`,
   membersIn: (count) => `${count} names of properties and methods`,
   ownFilesIn: (count) => `${count} file(s) of its own`,
+  functionsIn: (count) => `${count} function names`,
+  methodsIn: (count) => `${count} methods`,
+  typeCountIn: (count) => `${count} types`,
+  debugFileIn: (path) => `debug file ${path}`,
   dependencyFilesIn: (count) => `${count} of dependencies`,
   forExample: (sample) => `for example ${sample}`,
   // In the same order as the Korean table, which settles the order of kinds as bad as each other.
@@ -432,7 +476,7 @@ const EN = {
           : []),
         'Take them out of what ships and find out how they get in (a folder copied whole, a packaging file list).',
         ...(kinds.has('debug-symbols')
-          ? ['Do not delete the debug information (.dSYM): keep it outside what ships. It is what makes crash reports from users readable.']
+          ? ['Do not delete the debug information (.dSYM, .pdb, mapping.txt): keep it outside what ships. It is what makes crash reports from users readable.']
           : []),
       ],
     },
@@ -485,18 +529,26 @@ const EN = {
     },
     'native-symbols': {
       title: 'Names meant for development are still in the program',
-      body: ({ files, names, sources, builders }) => [
+      body: ({ files, names, sources, builders, formats, debugInfo }) => [
         `${files} program file(s) keep the names of functions and variables, ${names} in the one with the most. What the code does reads from the names alone.`,
+        ...(debugInfo > 0 ? ['Some also hold debug information (DWARF), which names every original file and line, and the variables in them.'] : []),
         ...(builders > 0
           ? ['They also hold the paths of original files, which show the account name and folder layout of the machine that built them.']
           : []),
         ...(sources > 0 && builders === 0
           ? ['They also hold the paths of original files, which show the folder layout of the code.']
           : []),
-        'Strip them before signing. For a program, strip with no options removes every name; for a library that other files load, strip -x keeps only the names used from outside. strip -S removes just the paths and the debugging entries.',
-        'In an Xcode build the settings Strip Linked Product (STRIP_INSTALLED_PRODUCT) and Strip Style (STRIP_STYLE) do this, in a build that has Deployment Postprocessing (DEPLOYMENT_POSTPROCESSING) on.',
-        'Keep the debug information (.dSYM) outside what ships first, and crash reports can still be read.',
-        'Run reaproof again afterwards: when this finding is gone, it worked. To count the names yourself, use nm --no-dyldinfo -a <file>; plain nm adds entries of its own, <redacted function N>, to a stripped program.',
+        ...(formats.has('mach-o')
+          ? [
+              'Strip them before signing. For a program, strip with no options removes every name; for a library that other files load, strip -x keeps only the names used from outside. strip -S removes just the paths and the debugging entries.',
+              'In an Xcode build the settings Strip Linked Product (STRIP_INSTALLED_PRODUCT) and Strip Style (STRIP_STYLE) do this, in a build that has Deployment Postprocessing (DEPLOYMENT_POSTPROCESSING) on.',
+              'Keep the debug information (.dSYM) outside what ships first, and crash reports can still be read.',
+            ]
+          : []),
+        ...(formats.has('elf') || formats.has('pe')
+          ? ['For a Linux, Android or Windows program, strip it or link with -s (Go: -ldflags="-s -w"; Rust: strip = true in the release profile). To keep debug information for crash reports, copy it out first (objcopy --only-keep-debug).']
+          : []),
+        `Run reaproof again afterwards: when this finding is gone, it worked.${formats.has('mach-o') ? ' To count the names yourself, use nm --no-dyldinfo -a <file>; plain nm adds entries of its own, <redacted function N>, to a stripped program.' : ''}`,
       ],
     },
     'macos-runtime': {
@@ -556,6 +608,34 @@ const EN = {
             ]
           : []),
         'The names of the app’s own files cannot be left out with a stable Rust setting. Move logic that must stay private to a server.',
+      ],
+    },
+    'go-program': {
+      title: 'Function names and source paths stay in a Go program',
+      body: ({ files, functions, ownFiles, dependencyFiles, dependencies, builders }) => [
+        functions > 0
+          ? `${files} program file(s) were built with Go. The one with the most keeps the names of ${functions} functions, the Go runtime's among them, and the paths of ${ownFiles} source file(s) of its own and ${dependencyFiles} of its dependencies. Go needs them to say where an error happened, so strip and -ldflags="-s -w" leave them in.`
+          : `${files} program file(s) were built with Go. Go keeps the names of their functions and the paths of their source files to say where an error happened, so strip and -ldflags="-s -w" leave them in.`,
+        `Its build info names the module and ${dependencies} dependency module(s) with their versions (go version -m <file> prints it).`,
+        ...(builders > 0
+          ? ['The paths include the home folder of the machine that built it, which shows the account name. Build with -trimpath and they start at the module path instead.']
+          : []),
+        'The function names cannot be left out with a Go setting. Move logic that must stay private to a server.',
+      ],
+    },
+    'dotnet-code': {
+      title: 'A .NET assembly reads back as source code',
+      body: ({ files, types, methods }) => [
+        `${files} .NET assembly file(s) keep their code as IL with the name of every type and method: ${types} types and ${methods} methods in the one with the most. A free decompiler such as ILSpy turns it back into C# that reads almost as written.`,
+        'Move logic that must stay private to a server.',
+      ],
+    },
+    'debug-file-path': {
+      title: 'A Windows program names a folder on the machine that built it',
+      body: ({ files }) => [
+        `${files} Windows program file(s) name their debug file (.pdb) by a path under the home folder of the machine that built them, which shows its account name and folder layout.`,
+        'Leave only the file name in that path: /PDBALTPATH:%_PDB% does it for the MSVC linker, the PathMap property for .NET.',
+        'Run reaproof again afterwards: when this finding is gone, it worked.',
       ],
     },
     'developer-file': {
@@ -789,6 +869,13 @@ export function createReporter(language) {
       if (detail.sourceCount > 0) facts.push(t.sourcesIn(detail.sourceCount, detail.sampleSources[0]));
       return `- ${path} (${facts.join(', ')})`;
     }
+    if (rule === 'debug-file-path') return `- ${path} (${t.debugFileIn(detail.debugFile)})`;
+    if (rule === 'go-program') {
+      const facts = [detail.goVersion, detail.modulePath, withSample(t.ownFilesIn(detail.ownFiles), detail.sample), t.dependencyFilesIn(detail.dependencyFiles)];
+      if (detail.functions) facts.push(t.functionsIn(detail.functions));
+      return `- ${path} (${facts.filter(Boolean).join(' · ')})`;
+    }
+    if (rule === 'dotnet-code') return `- ${path} (${t.typeCountIn(detail.types)} · ${t.methodsIn(detail.methods)})`;
     if (rule === 'source-paths') {
       return `- ${path} (${withSample(t.ownFilesIn(detail.ownFiles), detail.sample)} · ${t.dependencyFilesIn(detail.dependencyFiles)})`;
     }
@@ -831,6 +918,8 @@ export function createReporter(language) {
       fieldNames: sumOf('swiftFieldNames'),
       builders: findings.filter(({ detail }) => detail.namesBuilder).length,
       kinds: new Set(findings.map(({ detail }) => detail.kind)),
+      formats: new Set(findings.map(({ detail }) => detail.format)),
+      debugInfo: findings.filter(({ detail }) => detail.debugSections > 0).length,
       // A map too large to read whole has no counts, and the explanation says so.
       uncounted: findings.filter(({ detail }) => detail.sourceCount === null).length,
       addresses: addresses.length,

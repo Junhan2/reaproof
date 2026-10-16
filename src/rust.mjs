@@ -1,4 +1,4 @@
-import { HOME_FOLDER } from './program.mjs';
+import { ABSOLUTE_PATH as ABSOLUTE, HOME_FOLDER } from './program.mjs';
 
 // Rust keeps the path of each source file in which the program can stop on an error, so that
 // the error can say where it happened. The paths are text the program prints, not names in its
@@ -22,7 +22,6 @@ IS_SEPARATOR['/'.charCodeAt(0)] = 1;
 IS_SEPARATOR['\\'.charCodeAt(0)] = 1;
 const DRIVE = /^[A-Za-z]:[\\/]/;
 const SOURCE_PATH = /^(?:[A-Za-z]:[\\/]|\/)?(?:[\w.+@~-]+[\\/])+[\w.+@~-]+\.rs$/;
-const ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\/)/;
 // Where a path starts when other text runs straight into it: a folder at the top of a Mac or
 // Linux disk, or one that Rust's own builds put in place of their machine's folders.
 const RUN_INTO_ABSOLUTE = /\/(?:Users|home|root|usr|opt|var|tmp|private|Volumes|rustc|rust)\//;

@@ -2,6 +2,15 @@
 
 What changed in each release published to npm, newest first.
 
+## 0.7.0 (not published yet)
+
+- Reads Linux and Android programs (ELF) and Windows programs (PE) for the names and debug information a release should not keep, as it read Mac programs: the symbol table, and DWARF debug information with the original file names. A default `go build` on Linux kept 2,519 names that 0.6.0 did not report.
+- Notes a Windows program whose debug file path names a home folder of the machine that built it, and says how to leave only the file name. A `dotnet publish` from a home folder keeps such a path; with the `PathMap` property it did not.
+- Reports `.pdb` debug files and the `mapping.txt` that R8 writes for an Android app when they ship. `dotnet publish` puts the `.pdb` beside the app by default; 0.6.0 rated such an output baseline.
+- Notes what a Go program keeps after stripping: the names of its functions, the paths of its source files, and the module and dependencies its build info names. The counts match Go's own debug packages on the test programs and on fzf 0.74.5.
+- Notes .NET assemblies, whose code reads back as C#, with how many types and methods they define. The counts match .NET's own metadata reader on five .NET runtime assemblies, the largest with 41,416 methods.
+- Passes over the `packages` folder that sits beside Flutter's asset manifests, in an app and in a web build: it holds the files of the packages the app uses. A plugin's script there had rated LocalSend 1.18.2 moderate.
+
 ## 0.6.0 (2026-10-16)
 
 - Says when the screen code (HTML, JavaScript) of a Tauri app, which Tauri packs compressed into the program, was not read, and that it is checked in the project folder. Before, such an app could come out baseline with no word that its screen went unread. The JSON lists those programs in `unreadScreenCode`, and says it in `explain.unread`.
