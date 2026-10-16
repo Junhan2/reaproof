@@ -1,14 +1,18 @@
 <div align="center">
 
+<sub><b>New in 0.7.0:</b> Android apps, Windows and Linux programs, and SARIF for GitHub code scanning. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.7.0">Release notes</a></sub>
+
 # Reaproof
 
 **Before you ship, see what an AI agent could lift from your app, and close it in one command.**
 
-[![npm](https://img.shields.io/npm/v/reaproof?color=cb3837&label=npm)](https://www.npmjs.com/package/reaproof) [![test](https://github.com/Junhan2/reaproof/actions/workflows/test.yml/badge.svg)](https://github.com/Junhan2/reaproof/actions/workflows/test.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node 18.3 or later](https://img.shields.io/badge/node-%E2%89%A5%2018.3-339933)](https://nodejs.org)
+[![npm](https://img.shields.io/npm/v/reaproof?color=cb3837&label=npm)](https://www.npmjs.com/package/reaproof) [![test](https://github.com/Junhan2/reaproof/actions/workflows/test.yml/badge.svg)](https://github.com/Junhan2/reaproof/actions/workflows/test.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![node 18.3 or later](https://img.shields.io/badge/node-%E2%89%A5%2018.3-339933)](https://nodejs.org) [![website](https://img.shields.io/badge/website-junhan2.github.io%2Freaproof-3d35e6)](https://junhan2.github.io/reaproof/)
+
+**[Website](https://junhan2.github.io/reaproof/)** · [How it works](#how-it-works) · [Benchmarks](#benchmarks) · [What it checks](#what-it-checks) · [CI](#ready-for-ci) · [Get started](#get-started)
 
 <img src="https://raw.githubusercontent.com/Junhan2/reaproof/main/docs/report.svg" width="808" alt="A terminal running npx reaproof on a web app: rea risk very high, because a source map holds the original source of four files; the map is taken out after a yes, and rea risk falls to baseline">
 
-<sub>A real run on the web test app from <a href="#what-the-fixes-change-measured">What the fixes change, measured</a>. Lines left out are marked ⋯; the whole output is under <a href="#how-a-run-goes">How a run goes</a>.</sub>
+<sub>A real run on the web test app from <a href="#what-the-fixes-change-measured">What the fixes change, measured</a>. Lines left out are marked ⋯; the whole output is under <a href="#how-it-works">How it works</a>.</sub>
 
 </div>
 
@@ -20,7 +24,14 @@ It is written for people who have never dealt with security before. There is not
 npx reaproof
 ```
 
-## What it tells you
+## How it works
+
+1. **It reads, and changes nothing.** In a JavaScript project folder it finds the build output by name (`dist`, `.next/static`, `out`, `build` and the like). Anything else it reads as given: a folder, an app, a program or an archive.
+2. **It rates and explains.** The rating comes first. Each finding follows, worst first, with what it exposes and how to close it. Right under the count of files read, it says what it did not read.
+3. **It offers the fix it can make.** It lists the source map files it can take out and, after a `y`, moves them out of your output into a backup. `npx reaproof undo` puts them back.
+4. **You close the rest and run it again.** Each finding names the setting to change. A finding that is gone is fixed. The report ends with what to do next.
+
+### What the rating means
 
 Every report opens with the rea risk and where it sits on the scale.
 
@@ -33,13 +44,6 @@ Every report opens with the rea risk and where it sits on the scale.
 | ⚪ | **not rated** | What ships could not be read, so no rating is given | A disk image, an installer or an archive it does not open. It does not mean nothing leaks |
 
 There is no "safe" level, because there is no such state: see "What it cannot do".
-
-## How a run goes
-
-1. **It reads, and changes nothing.** In a JavaScript project folder it finds the build output by name (`dist`, `.next/static`, `out`, `build` and the like). Anything else it reads as given: a folder, an app, a program or an archive.
-2. **It rates and explains.** The rating comes first. Each finding follows, worst first, with what it exposes and how to close it. Right under the count of files read, it says what it did not read.
-3. **It offers the fix it can make.** It lists the source map files it can take out and, after a `y`, moves them out of your output into a backup. `npx reaproof undo` puts them back.
-4. **You close the rest and run it again.** Each finding names the setting to change. A finding that is gone is fixed. The report ends with what to do next.
 
 <details>
 <summary>The whole output of the run in the picture above</summary>
@@ -95,93 +99,54 @@ To keep them from coming back on the next build:
 
 </details>
 
-## Three ways to use it
+## In numbers
 
-### Yourself
+| 1 | 0 | 60 | 13 |
+| :---: | :---: | :---: | :---: |
+| command to start: `npx reaproof` | dependencies, and nothing to configure | patterns for server keys, from Stripe and AWS to xAI and Supabase | test setups for every change: Node 18 to 24 on Linux, macOS and Windows |
 
-```bash
-npx reaproof
-```
+## Benchmarks
 
-Run it in your project folder. It rates the risk, lists what it found, and when there is something it can close, it shows the list and asks before doing it. If nothing is built yet, it offers to run your build first.
+### What the fix changes for rea
 
-Nothing stays installed. `npx` comes with Node.js and fetches the package when you run it; the first time, it asks `Ok to proceed? (y)` before downloading. Answer `y`.
-
-To check a live site instead, give it the address:
-
-```bash
-npx reaproof https://your-site.example
-```
-
-### With an AI agent
-
-Say this to any coding agent that can run commands:
-
-> Run `npx reaproof --json` and fix what it reports.
-
-The JSON carries the risk level and, for every kind of finding, what it means and what to do, so the agent needs no setup. It opens with the verdict and ends with the list of findings, so a reader that cuts long output short still gets the verdict. With the verdict come `failOn` and `exitCode`, for an agent that is not shown how the command ended. A failure is answered in JSON too, on standard output, with a `code`, the reason and the `exitCode`. Paths, file names and addresses inside the findings are copied from the scanned files: characters a reader cannot see are removed, long text is cut, and every JSON answer opens by saying that this text is data to report, not instructions to follow.
-
-To make the agent reach for it by itself, install the skill once:
-
-```bash
-npx skills add Junhan2/reaproof
-```
-
-That works for Claude Code, Codex, Cursor, Gemini CLI and other agents. In Claude Code you can also install it as a plugin:
-
-```
-/plugin install reaproof --marketplace Junhan2/reaproof
-```
-
-On Claude Code older than 2.1.275, run `/plugin marketplace add Junhan2/reaproof` and then `/plugin install reaproof@reaproof`.
-
-### Automatically
-
-`npx reaproof` exits with 1 when something critical or high would ship, so it can stop a release. Add it after your build step. `--fail-on medium` stops for medium findings as well, and `--fail-on critical` for critical ones only. A report that ends with exit code 1 or 3 closes with a line that says why, for whoever reads the log later. It exits with 3 when it could not read what ships, which a release check should not take for a pass, and with 4 when Reaproof itself failed, which says nothing about your app.
-
-With `--sarif` the result is printed as SARIF 2.1.0, the format GitHub code scanning and other review tools read: one rule for each kind of finding, with the report's own explanation, and one result for each finding. A result points at the file, or at the archive the file is in, as a path from the folder that was checked, and at the address of the file on a deployed site. GitHub places a result on a file only when that file is in the repository, so for a build output that is not committed the alert shows without a place in the code. The exit code is the same as without `--sarif`, so the step below still stops the job, and the upload after it runs whether it stopped or not:
-
-```yaml
-permissions:
-  security-events: write
-steps:
-  - uses: actions/checkout@v7
-  - uses: actions/setup-node@v7
-  - run: npm ci && npm run build
-  - run: npx reaproof --sarif > reaproof.sarif
-  - uses: github/codeql-action/upload-sarif@v4
-    if: ${{ !cancelled() }}
-    with:
-      sarif_file: reaproof.sarif
-```
-
-To leave out files you know about, list them in `.reaproofignore` in the project folder, one pattern to a line as in `.gitignore`: `#` starts a comment, `*` stands for any part of a name and `**` for any number of folders, a pattern that ends with `/` is for folders only, and one with a `/` before its end counts from the project folder. A line that starts with `!` is not read, so what a pattern leaves out stays out. Inside an archive a file's path is the archive's, `/`, then its path inside: `dist/app.zip/samples/` leaves out the `samples` folder in that archive. What a pattern leaves out is not read at all, and the report names it under the count of files read, so nothing goes quiet without a word.
-
-## Reading the result
-
-Right under the count of files read, the report says what it met and did not read: disk images and installers it does not open, archives it could not read, files it could not open (no permission, a password, a kind of compression it does not undo), folders it had no permission to open, files too large to read, files over 30 MB that it searched for keys alone, the screen code inside a Tauri app, what `.reaproofignore` left out, and how many files it passed over because there is nothing to find in them (pictures, sound, video, fonts, compressed files). The result is "not rated", never "baseline", when no file's content could be read, and also when something was left unread and no program or script was read beside it: what ships is then most likely in what was left.
-
-Under the rea risk, one line shows every level with the result's own in brackets. Below it, the report counts kinds of leak, each at its worst severity. Three hundred exposed maps are the same mistake as one. Notes are not counted.
-
-The report ends with what to do next: check first what it did not read, then fix from the top and run it again, or, when nothing leaks, run it after each build and check the deployed site as well.
-
-At a terminal the rating and the kind of each finding are in color. Set `NO_COLOR` to turn color off; in a pipe, in CI and with `--json` there is none.
-
-Exit codes: 0 when no leak at the `--fail-on` level or above was found (the level is high unless you say otherwise, so a moderate result exits with 0), 1 when one was, 2 for a usage error or a target that could not be settled on, 3 when what ships could not be read (an address that did not answer, or a target with nothing in it that Reaproof opens), 4 when Reaproof itself ran into an error. Please report a 4 at [Issues](https://github.com/Junhan2/reaproof/issues).
-
-## Commands
-
-| Command | What it does |
+| Our web test app | Original files rea names |
 | --- | --- |
-| `reaproof [path]` | Rates the risk of a build output or an app, reports, and offers the fix |
-| `reaproof <https://your-site>` | Checks whether a deployed site serves its source maps |
-| `reaproof fix [path]` | Takes source map files out of the output, after showing the list and asking |
-| `reaproof undo [path]` | Puts back what the last fix took out |
-| `reaproof measure [path]` | Runs the real rea on the output and counts what it reads |
+| Minified, with its source map | 4 of 4 |
+| The same after `reaproof fix` | 0 |
 
-Options: `--json` for machine-readable output, `--sarif` for SARIF output from a scan (see "Automatically"), `--yes` to skip the question in `fix` and `measure`, `--fail-on critical|high|medium` for the mildest leak that makes the exit code 1, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
+Four TypeScript files bundled with Bun 1.2.19, measured with rea 6.4.0 on 2026-10-14; rea 6.5.0 gave the same counts on 2026-10-16. Minifying alone changed none of rea's counts. The whole measurement, with a macOS program, is under [What the fixes change, measured](#what-the-fixes-change-measured).
 
-The path can be a build output folder, a packaged app, a single program, or an archive such as a `.zip`, an `.ipa` or an Electron `.asar`, and it is scanned as given. Only a JavaScript project folder, one with a `package.json`, is searched for its output: Reaproof looks there for `.next/static`, `out`, `dist`, `build`, `release` and `.output/public`, and the report says the folders were picked by name. For a project in another language (a folder with `Package.swift`, an Xcode project, `Cargo.toml`, `go.mod` and the like) it does not guess where the build went. Point it at the thing that ships, for example the `.app`.
+### Same answer as the reference tool
+
+| What is counted | On | Reaproof | Reference tool | |
+| --- | --- | --- | --- | --- |
+| Android build left debuggable | Termux 0.118.3, debug build from its GitHub release | debuggable | `aapt`: debuggable | ✓ same |
+| Android classes that keep their names | Fossify Gallery 1.14.0 | 228 of 228 | `dexdump`: 228 | ✓ same |
+| Names a default `go build` keeps | Our Go test program, for Linux | 2,519 | `readelf`: 2,519 functions and objects | ✓ same |
+| Electron fuses that check `app.asar` | 16 Electron apps on the test Mac | 16 of 16 | `@electron/fuses read` | ✓ same |
+| Function names in WebAssembly | 12 modules on the test Mac | 12 of 12 | wabt `wasm-objdump` | ✓ same |
+| .NET types and methods | 5 .NET runtime assemblies, the largest with 41,416 methods | 5 of 5 | .NET's metadata reader | ✓ same |
+| Swift and Objective-C names left after `strip` | Our macOS test program, Swift 6.3 | 44 · 42 · 22 · 20 | `otool`, same sections | ✓ same |
+| Paths left out by `.reaproofignore` | 20 paths, 11 patterns | 17 | `git check-ignore`: 17 | ✓ same |
+| SARIF output | 7 targets | 7 of 7 valid | OASIS SARIF 2.1.0 schema | ✓ same |
+
+### Speed on real builds
+
+| Target | Size | Files read | Time |
+| --- | ---: | ---: | ---: |
+| Our web test app | 6.3 kB | 3 | 0.04 s |
+| Our Vite build with eight SDKs | 1.8 MB | 3 | 0.05 s |
+| ripgrep 15.2.0 for Windows, `.zip` | 1.8 MB | 14 | 0.06 s |
+| Fossify Gallery 1.14.0, `.apk` | 38.5 MB | 1,606 | 0.18 s |
+| Joplin 3.7.10, `.apk` | 177.1 MB | 1,162 | 0.59 s |
+| Electron Fiddle 0.39.0 for macOS, `.zip` | 117.8 MB | 366 | 1.30 s |
+
+Median of three runs of `reaproof <target> --json` on 2026-10-17, on an Apple M4 Pro with Node 24.14.0, Node's own start included. Size is the file or folder on disk.
+
+### Safe on archives built to cost you
+
+- A 1 MB archive whose one file states 1 MB and holds 1 GB is refused in 0.04 s with 55 MB of memory in use. Without that stop it used 2.1 GB.
+- A 137 kB archive that holds another many times over and lists twenty million files is done with after about a million of them, in about a second.
 
 ## What it checks
 
@@ -224,6 +189,160 @@ Each is told by the prefix the service issues its keys with, as the service docu
 - Looked for in text only, in code, scripts and settings files of any name: Replicate, Hugging Face, NVIDIA, Pinecone, LangSmith, Langfuse, Resend; GitLab, npm, PyPI, RubyGems, Docker Hub, Postman, Linear, Notion, Airtable, Atlassian, Contentful, Typeform; Supabase management tokens, DigitalOcean, PlanetScale, Heroku, Fly.io, Deno Deploy, Databricks, Doppler, HashiCorp Vault, Tailscale, Pulumi, Cloudflare Origin CA keys, 1Password service accounts, `age` secret keys, Alibaba Cloud key IDs, Azure storage and messaging keys; Sentry, Grafana, New Relic, Dynatrace, PostHog personal keys. Most are for publishing, deploying or running servers, and sit in settings files and scripts. In bytes, where strings run into each other, the names in a program spell their shorter prefixes: across the programs in `/Applications` on the test Mac, none of the 71 matches of these kinds was a key issued for the app (61 were names such as `tfp_8sanitize` or stand-ins, and 10 were one Alibaba key ID that unrelated programs all carry), and searching for the rest in bytes made the search half as long again.
 
 For the `.env` comparison, Reaproof reads the `.env` files of the project the path belongs to: the nearest folder, the path itself or one above it, that holds a `package.json` or another project file such as `Package.swift` or `Cargo.toml`. The search stops short of your home folder, so a `package.json` left there does not make everything under it one project. The values are compared and never printed. Variables with a prefix their framework documents as public (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`, `NUXT_PUBLIC_`, `GATSBY_`, `VUE_APP_`, `STORYBOOK_`) are expected in the output, unless the name itself says `SECRET`, `PRIVATE`, `PASSWORD` or `SERVICE_ROLE`.
+
+## Three ways to use it
+
+### Yourself
+
+```bash
+npx reaproof
+```
+
+Run it in your project folder. It rates the risk, lists what it found, and when there is something it can close, it shows the list and asks before doing it. If nothing is built yet, it offers to run your build first.
+
+Nothing stays installed. `npx` comes with Node.js and fetches the package when you run it; the first time, it asks `Ok to proceed? (y)` before downloading. Answer `y`.
+
+To check a live site instead, give it the address:
+
+```bash
+npx reaproof https://your-site.example
+```
+
+### With an AI agent
+
+Say this to any coding agent that can run commands:
+
+> Run `npx reaproof --json` and fix what it reports.
+
+The JSON carries the risk level and, for every kind of finding, what it means and what to do, so the agent needs no setup. It opens with the verdict and ends with the list of findings, so a reader that cuts long output short still gets the verdict. With the verdict come `failOn` and `exitCode`, for an agent that is not shown how the command ended. A failure is answered in JSON too, on standard output, with a `code`, the reason and the `exitCode`. Paths, file names and addresses inside the findings are copied from the scanned files: characters a reader cannot see are removed, long text is cut, and every JSON answer opens by saying that this text is data to report, not instructions to follow.
+
+To make the agent reach for it by itself, install the skill once:
+
+```bash
+npx skills add Junhan2/reaproof
+```
+
+That works for Claude Code, Codex, Cursor, Gemini CLI and other agents. In Claude Code you can also install it as a plugin:
+
+```
+/plugin install reaproof --marketplace Junhan2/reaproof
+```
+
+On Claude Code older than 2.1.275, run `/plugin marketplace add Junhan2/reaproof` and then `/plugin install reaproof@reaproof`.
+
+### Automatically
+
+`npx reaproof` exits with 1 when something critical or high would ship, so it can stop a release. Add it after your build step. `--fail-on medium` stops for medium findings as well, and `--fail-on critical` for critical ones only. A report that ends with exit code 1 or 3 closes with a line that says why, for whoever reads the log later. It exits with 3 when it could not read what ships, which a release check should not take for a pass, and with 4 when Reaproof itself failed, which says nothing about your app. For SARIF output and the list of files to leave out, see [Ready for CI](#ready-for-ci).
+
+<div align="center">
+
+**Check the build you are about to ship.** It reads first, rates the risk, and asks before it changes anything.
+
+```bash
+npx reaproof
+```
+
+</div>
+
+## What you can point it at
+
+| | What | How |
+| --- | --- | --- |
+| **Web builds** | Next.js, Vite, Create React App, Nuxt and any folder of HTML, JavaScript, CSS and maps | In a project folder the output is picked by name |
+| **Desktop apps** | Electron apps and their `.asar`, Tauri apps, and Mac apps with every framework and helper inside | A Tauri app's screen code is checked in its project folder |
+| **Mobile apps** | Android `.apk` and `.aab`, React Native bundles and Hermes bytecode, iOS `.ipa`, Flutter builds | See [Android apps](#android-apps) |
+| **Programs** | Mach-O, ELF and PE programs, .NET assemblies, Go and Rust builds, WebAssembly modules | Read without running them; see [Native programs](#native-programs) |
+| **Archives** | `.zip` and every file in that format (`.jar`, `.msix` and the like), `.tar` and `.tgz` as `npm pack` writes them | Three deep, in memory; see [How files are read](#how-files-are-read) |
+
+Not opened yet: `.dmg`, `.pkg`, `.7z`, `.rar`, `.tar.xz` and `.tar.zst`. The report lists them as unread, never as clean.
+
+## Ready for CI
+
+- **Exit codes that mean one thing each**, so a release check never takes "could not read" for a pass. See [Reading the result](#reading-the-result).
+- **`--fail-on critical|high|medium`** sets the mildest finding that fails the step.
+- **`--json` for agents and scripts**: the verdict comes first, and text copied from scanned files is marked as data, not instructions.
+- **`--sarif` for GitHub code scanning**: one rule for each kind of finding, one result for each finding.
+- **`.reaproofignore` for files you know about**, in `.gitignore` patterns. The report names everything it left out.
+- **Reads only by default.** `fix` shows the list and asks, keeps a backup outside the project, and `undo` reverses it.
+- **No dependencies. MIT.** Node.js 18.3 or later on Linux, macOS and Windows.
+
+With `--sarif` the result is printed as SARIF 2.1.0, the format GitHub code scanning and other review tools read: one rule for each kind of finding, with the report's own explanation, and one result for each finding. A result points at the file, or at the archive the file is in, as a path from the folder that was checked, and at the address of the file on a deployed site. GitHub places a result on a file only when that file is in the repository, so for a build output that is not committed the alert shows without a place in the code. The exit code is the same as without `--sarif`, so the step below still stops the job, and the upload after it runs whether it stopped or not:
+
+```yaml
+permissions:
+  security-events: write
+steps:
+  - uses: actions/checkout@v7
+  - uses: actions/setup-node@v7
+  - run: npm ci && npm run build
+  - run: npx reaproof --sarif > reaproof.sarif
+  - uses: github/codeql-action/upload-sarif@v4
+    if: ${{ !cancelled() }}
+    with:
+      sarif_file: reaproof.sarif
+```
+
+To leave out files you know about, list them in `.reaproofignore` in the project folder, one pattern to a line as in `.gitignore`: `#` starts a comment, `*` stands for any part of a name and `**` for any number of folders, a pattern that ends with `/` is for folders only, and one with a `/` before its end counts from the project folder. A line that starts with `!` is not read, so what a pattern leaves out stays out. Inside an archive a file's path is the archive's, `/`, then its path inside: `dist/app.zip/samples/` leaves out the `samples` folder in that archive. What a pattern leaves out is not read at all, and the report names it under the count of files read, so nothing goes quiet without a word.
+
+## Real runs
+
+What the report said, word for word.
+
+- **Our web test app**, before and after `reaproof fix`: `[CRITICAL] Your original source code is public`, then `rea risk: very high → baseline`. rea named 4 of 4 original files before the fix and 0 after.
+- **Termux 0.118.3**, the debug build from its GitHub release: `[HIGH] An Android app ships as a development build`, `rea risk: high`. Debuggable, as `aapt` says, and 209 of its 211 own classes keep their names.
+- **A `dotnet publish` of our .NET test app**: `[HIGH] Files that should never ship are in the output`, `rea risk: high`. It puts the `.pdb` debug files beside the app by default. Reaproof 0.6.0 rated the same output baseline.
+- **Our Go test program**, a default `go build` for Linux: `[MEDIUM] Names meant for development are still in the program` and `[NOTE] Function names and source paths stay in a Go program`. 2,519 names, as `readelf` counts them. Stripped, it still keeps 1,796 function names, which Go reads while it runs.
+
+## Counts checked against
+
+`aapt` · `dexdump` · `bundletool` · `readelf` · `otool` · `nm` · `codesign` · `wasm-objdump` · `@electron/fuses` · `go version -m` · .NET's metadata reader · `git check-ignore` · the OASIS SARIF 2.1.0 schema · rea 6.5.0
+
+## Get started
+
+1. Install [Node.js](https://nodejs.org) 18.3 or later, if you do not have it.
+2. Build your app as you would for a release.
+3. In the project folder, run `npx reaproof`.
+4. Answer `y` to take out what it can, then fix the rest from the top and run it again.
+
+To hand it to your AI agent, install the skill once with `npx skills add Junhan2/reaproof` (see [With an AI agent](#with-an-ai-agent)). The same guide, laid out as a page, is at [junhan2.github.io/reaproof](https://junhan2.github.io/reaproof/).
+
+## What it cannot do
+
+Reaproof does not make an app impossible to copy. Nothing can.
+
+- Screen structure and the server addresses your app calls stay readable, because they have to reach the user's device.
+- Minified code stays readable in structure, and its numbers and strings stay as they are.
+- The only logic nobody can read is logic that runs on your server. Reaproof says so in every report.
+
+---
+
+<sub>The rest is reference: how the result reads, every command, how each kind of file is read, the full measurements, and what is not covered yet.</sub>
+
+## Reading the result
+
+Right under the count of files read, the report says what it met and did not read: disk images and installers it does not open, archives it could not read, files it could not open (no permission, a password, a kind of compression it does not undo), folders it had no permission to open, files too large to read, files over 30 MB that it searched for keys alone, the screen code inside a Tauri app, what `.reaproofignore` left out, and how many files it passed over because there is nothing to find in them (pictures, sound, video, fonts, compressed files). The result is "not rated", never "baseline", when no file's content could be read, and also when something was left unread and no program or script was read beside it: what ships is then most likely in what was left.
+
+Under the rea risk, one line shows every level with the result's own in brackets. Below it, the report counts kinds of leak, each at its worst severity. Three hundred exposed maps are the same mistake as one. Notes are not counted.
+
+The report ends with what to do next: check first what it did not read, then fix from the top and run it again, or, when nothing leaks, run it after each build and check the deployed site as well.
+
+At a terminal the rating and the kind of each finding are in color. Set `NO_COLOR` to turn color off; in a pipe, in CI and with `--json` there is none.
+
+Exit codes: 0 when no leak at the `--fail-on` level or above was found (the level is high unless you say otherwise, so a moderate result exits with 0), 1 when one was, 2 for a usage error or a target that could not be settled on, 3 when what ships could not be read (an address that did not answer, or a target with nothing in it that Reaproof opens), 4 when Reaproof itself ran into an error. Please report a 4 at [Issues](https://github.com/Junhan2/reaproof/issues).
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `reaproof [path]` | Rates the risk of a build output or an app, reports, and offers the fix |
+| `reaproof <https://your-site>` | Checks whether a deployed site serves its source maps |
+| `reaproof fix [path]` | Takes source map files out of the output, after showing the list and asking |
+| `reaproof undo [path]` | Puts back what the last fix took out |
+| `reaproof measure [path]` | Runs the real rea on the output and counts what it reads |
+
+Options: `--json` for machine-readable output, `--sarif` for SARIF output from a scan (see "Automatically"), `--yes` to skip the question in `fix` and `measure`, `--fail-on critical|high|medium` for the mildest leak that makes the exit code 1, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
+
+The path can be a build output folder, a packaged app, a single program, or an archive such as a `.zip`, an `.ipa` or an Electron `.asar`, and it is scanned as given. Only a JavaScript project folder, one with a `package.json`, is searched for its output: Reaproof looks there for `.next/static`, `out`, `dist`, `build`, `release` and `.output/public`, and the report says the folders were picked by name. For a project in another language (a folder with `Package.swift`, an Xcode project, `Cargo.toml`, `go.mod` and the like) it does not guess where the build went. Point it at the thing that ships, for example the `.app`.
 
 ## How files are read
 
@@ -296,14 +415,6 @@ A Rust program, measured on 2026-10-15: rustc 1.98.1, three source files and one
 
 Not measured: what rea reads with a disassembler behind it (Hopper, Ghidra or IDA), which is where the names in the symbol table would show as function names, and none of which was installed. And what the Hardened Runtime and `get-task-allow` change in practice: those two findings rest on Apple's documentation.
 
-## What it cannot do
-
-Reaproof does not make an app impossible to copy. Nothing can.
-
-- Screen structure and the server addresses your app calls stay readable, because they have to reach the user's device.
-- Minified code stays readable in structure, and its numbers and strings stay as they are.
-- The only logic nobody can read is logic that runs on your server. Reaproof says so in every report.
-
 ## How the fix works
 
 The fix moves standalone `.map` files out of the build output into `~/.reaproof/backups/`, outside your project, so a backup is never deployed by accident. It never edits your code files, because changing them would break integrity hashes. `reaproof undo` moves the files back. A map that cannot be moved, because its folder is locked or another program holds it, is left where it is and named, the others are still moved, and the rating after the fix counts what was left.
@@ -354,6 +465,10 @@ No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files a
 
 The picture at the top is a run recorded in a real terminal with `docs/tools/capture.py` and drawn with `docs/tools/render-svg.mjs`. Each script says at its top how it is run.
 
+The website is the static page in `site/`, published to GitHub Pages by `.github/workflows/pages.yml` when it changes on main. Its first screen repeats the lines of `docs/report.svg`, so record and draw both again together.
+
 ## License
 
 MIT
+
+[Website](https://junhan2.github.io/reaproof/) · [npm](https://www.npmjs.com/package/reaproof) · [Releases](https://github.com/Junhan2/reaproof/releases) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/Junhan2/reaproof/issues)
