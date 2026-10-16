@@ -3,7 +3,7 @@ import { toShownText } from './text.mjs';
 
 // The release of rea this version was tested against. A published release cannot change
 // after the fact, and its result format is the one the count below reads.
-const REA_VERSION = '6.4.0';
+const REA_VERSION = '6.5.0';
 /** What `measure` downloads and runs; shown to the user before they agree to it. */
 export const REA_PACKAGE = `rea-agents@${REA_VERSION}`;
 const REA_TIMEOUT_MS = 15 * 60 * 1000;

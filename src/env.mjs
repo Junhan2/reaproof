@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { isEnvFileName } from './checks/paths.mjs';
 import { isCredentialAddress } from './checks/secrets.mjs';
 
-// Each of these prefixes is documented by its framework as "sent to the browser":
-// Next.js, Vite, Create React App, Astro and Expo.
-const PUBLIC_PREFIX = /^(?:NEXT_PUBLIC_|VITE_|REACT_APP_|PUBLIC_|EXPO_PUBLIC_)/;
+// Each of these prefixes is documented by its framework as "sent to the browser": Next.js,
+// Vite, Create React App, Astro and SvelteKit, Expo, Nuxt (runtime config), Gatsby, Vue CLI
+// and Storybook.
+const PUBLIC_PREFIX = /^(?:NEXT_PUBLIC_|VITE_|REACT_APP_|PUBLIC_|EXPO_PUBLIC_|NUXT_PUBLIC_|GATSBY_|VUE_APP_|STORYBOOK_)/;
 // A public prefix does not make a secret safe to publish.
 const SECRET_NAME = /SECRET|PRIVATE|PASSWORD|PASSWD|SERVICE_ROLE/;
 const ASSIGNMENT = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/;
@@ -86,8 +87,10 @@ function unquote(rawValue) {
   if ((quote === '"' || quote === "'") && rawValue.endsWith(quote) && rawValue.length > 1) {
     return rawValue.slice(1, -1);
   }
-  // Unquoted values end at an inline comment.
-  return rawValue.replace(/\s+#.*$/, '');
+  // Unquoted values end at an inline comment. It is found by where it starts and not by a
+  // pattern over the rest, which a long run of spaces would make slow to try.
+  const comment = rawValue.search(/\s#/);
+  return comment === -1 ? rawValue : rawValue.slice(0, comment).trimEnd();
 }
 
 function isPublishedOnPurpose(variable) {

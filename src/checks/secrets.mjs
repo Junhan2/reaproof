@@ -66,8 +66,9 @@ const SECRET_PATTERNS = [
     accepts: isSupabaseServiceRoleJwt,
   },
 ];
-// One file full of key-shaped text is noise or an attack, not that many keys.
-const MAX_FINDINGS_PER_SEARCH = 200;
+// One file full of key-shaped text is noise or an attack, not that many keys. A search stops
+// here, and so does a file read a stretch at a time.
+export const MAX_KEYS_IN_A_FILE = 200;
 
 /**
  * How a set of patterns is searched for: the patterns, one combined pattern that rules out
@@ -179,7 +180,7 @@ function search({ patterns, anySecret, isNotAStandIn, sameLength, redact: redact
       // whole stretch in memory for as long as the file is being searched.
       seen.add(structuredClone(key));
       findings.push({ rule: 'secret', severity, path, detail: { secretId: id, redacted: redact(match) } });
-      if (findings.length === MAX_FINDINGS_PER_SEARCH) return findings;
+      if (findings.length === MAX_KEYS_IN_A_FILE) return findings;
     }
   }
   return findings;

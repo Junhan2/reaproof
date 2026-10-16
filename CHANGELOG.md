@@ -8,7 +8,17 @@ What changed in each release published to npm, newest first.
 - Lists, as a note, the paths of Rust source files that a program keeps as text after stripping: how many are the program's own and how many its dependencies', and whether one names the home folder of the machine that built it, with how `--remap-path-prefix` replaces that folder. Only a program that holds Rust's standard library counts, so other programs with text that ends in `.rs` are not noted.
 - Shows an example class name as its code spells it: a Swift class declared inside a function by its own name. A name that cannot be spelled so is left out instead of shown mangled.
 - For a first run: says before it starts that it only reads, shows every rating level with the result's own in brackets, ends every report with what to do next, and colors the rating and the kind of each finding at a terminal (`NO_COLOR` turns color off).
-- The README opens with a real run, what each rating means and how a run goes.
+- Reports a source map over 30 MB in a build output or an archive, which was only counted as skipped: it is searched a piece at a time for whether it holds source text and for values from `.env`, and its files are not counted. `fix` takes it out like any other map. On a deployed site a map that large is still counted as skipped.
+- Reports a `.DS_Store` in what ships (medium): the Finder writes the names of the files in its folder into it, and on a website anyone can fetch it.
+- Lists the kinds of finding worst first, as the README says. They were listed in a fixed order of kinds, which put a high finding such as a database file above a critical one.
+- Does not enter Python's `site-packages` and `dist-packages`, as it does not enter `node_modules`, so the test keys and notes of libraries are not reported as yours.
+- Takes the public prefixes of Nuxt (`NUXT_PUBLIC_`), Gatsby (`GATSBY_`), Vue CLI (`VUE_APP_`) and Storybook (`STORYBOOK_`) as public in the `.env` comparison.
+- Names an option it does not know, or one used the wrong way, in plain words instead of Node's message.
+- An error inside Reaproof itself ends with exit code 4, a message that says where to report it and, under it, where in the code it happened (`stack` in the JSON with `--json`). It ended with 1, which a release check took for a leak found, and a stack trace alone.
+- A `.env` line with a long run of spaces no longer slows the check: reading one with 160,000 spaces took 13.4 seconds and now takes under a millisecond.
+- `measure` runs rea 6.5.0, which gave the same counts as 6.4.0 on the test app's builds.
+- Agent skill: what to do when `unreadScreenCode` lists a program, and what the `source-paths` note asks of the user.
+- The README opens with a real run, what each rating means and how a run goes. The two scripts that recorded and drew that run are kept in `docs/tools`.
 
 ## 0.5.0 (2026-10-14)
 
