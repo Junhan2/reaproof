@@ -4,13 +4,14 @@ import { basename, dirname, extname, join, relative, resolve, sep } from 'node:p
 import { openAsar } from './asar.mjs';
 import { fileBytes, lazyBytes, readChunks } from './bytes.mjs';
 import { checkStrayDirectory, isSealedContainer, isTextless, strayDirectoryKind } from './checks/paths.mjs';
-import { checkSecrets, checkSecretsInBytes } from './checks/secrets.mjs';
+import { checkSecrets, checkSecretsInBytes, MAX_KEYS_IN_A_FILE } from './checks/secrets.mjs';
+import { checkLargeMap, collectLargeMap, startLargeMap } from './checks/sourcemaps.mjs';
 import { checkElectronFuses } from './electron.mjs';
 import { checkEnvValues, readEnvSecrets } from './env.mjs';
 import { readMachO } from './macho.mjs';
 import { checkMachO } from './macos.mjs';
 import { isLinuxOrWindowsProgram } from './program.mjs';
-import { archiveFinding, checkFile, checkPath, hasContentChecks, isScript, summarizeFindings } from './rules.mjs';
+import { archiveFinding, checkFile, checkPath, hasContentChecks, isScript, isSourceMap, summarizeFindings } from './rules.mjs';
 import { checkRustSourcePaths, collectRustSourcePaths, startRustSourcePaths } from './rust.mjs';
 import { holdsTauriScreenCode } from './tauri.mjs';
 import { toShown, toShownText } from './text.mjs';
@@ -44,8 +45,8 @@ export const CHUNK_BYTES = 896 * 1024;
 // Each chunk runs this far into the next, so a key across the join is whole in one of them,
 // with what stands around it.
 export const OVERLAP_BYTES = 64 * 1024;
-// One file full of key-shaped bytes is noise or an attack, not that many keys.
-const MAX_FINDINGS_IN_BYTES = 200;
+// Where JavaScript and Python keep the libraries a program is built on.
+const DEPENDENCY_FOLDERS = new Set(['node_modules', 'site-packages', 'dist-packages']);
 const FRAMEWORK_BY_PACKAGE = {
   next: 'next',
   vite: 'vite',
@@ -271,9 +272,13 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
 
   const isText = hasContentChecks(extension);
   const wasOpened = open((source) => {
+    // A map too large to read whole can still carry all of the original source. It is read
+    // a stretch at a time for what a smaller one is read for.
+    const isLargeMap = isSourceMap(extension) && source.byteLength > MAX_FILE_BYTES;
+    const isReadWhole = isText && !isLargeMap;
     // A file inside an archive is held whole in memory once read, and counts against what
     // may still be read out of that archive.
-    const mostBytesOfOne = isText ? MAX_FILE_BYTES : within ? MAX_HELD_BYTES : Infinity;
+    const mostBytesOfOne = isReadWhole ? MAX_FILE_BYTES : within ? MAX_HELD_BYTES : Infinity;
     if (source.byteLength > Math.min(mostBytesOfOne, within?.budget.left ?? Infinity)) {
       result.skippedLargeFiles.push(displayPath);
       return;
@@ -301,7 +306,8 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
       result.skippedLargeFiles.push(displayPath);
     } else {
       result.filesScanned += 1;
-      if (isText) scanText({ displayPath, extension, diskPath, source }, state);
+      if (isReadWhole) scanText({ displayPath, extension, diskPath, source }, state);
+      else if (isLargeMap) scanLargeMap({ displayPath, diskPath, source }, state);
       else scanBytes({ displayPath, diskPath, source }, state);
     }
   });
@@ -370,6 +376,28 @@ function scanText({ displayPath, extension, diskPath, source }, state) {
 }
 
 /**
+ * A source map too large to read whole, read a stretch at a time for whether it carries the
+ * original source and for values from `.env`. Keys are not looked for by their shape, as in
+ * any map: a map carries the sources of dependencies too, and the example keys in their docs.
+ */
+function scanLargeMap({ displayPath, diskPath, source }, state) {
+  const map = startLargeMap();
+  const envFindings = new Map();
+  const hasEnvValues = state.envSecrets.length > 0;
+  for (const chunk of readChunks(source, CHUNK_BYTES, OVERLAP_BYTES)) {
+    collectLargeMap(source, chunk, OVERLAP_BYTES, map);
+    // With no `.env` value to look for, the rest can tell nothing more once the source shows.
+    if (!hasEnvValues && map.carriesSource) break;
+    if (!hasEnvValues) continue;
+    // The same value where two chunks overlap is one finding.
+    for (const finding of checkEnvValues(displayPath, chunk.bytes.toString('latin1'), state.envSecrets)) {
+      envFindings.set(JSON.stringify(finding), finding);
+    }
+  }
+  addFindings(state, [...checkLargeMap(displayPath, map), ...envFindings.values()], diskPath);
+}
+
+/**
  * Text in the encoding its first bytes announce. Nearly all of it is UTF-8; a file that
  * opens with a UTF-16 mark would read as every other character missing.
  */
@@ -421,7 +449,7 @@ function scanBytes({ displayPath, diskPath, source }, state) {
     }
     const inThisChunk = [checkElectronFuses(displayPath, source, chunk)];
     // The search for keys stops at its limit; the rest goes on to the end of the file.
-    const wantsKeys = keys.length < MAX_FINDINGS_IN_BYTES;
+    const wantsKeys = keys.length < MAX_KEYS_IN_A_FILE;
     if (wantsKeys || state.envSecrets.length > 0) {
       for (const text of readAsText(chunk.bytes, isText)) {
         // What a finding quotes is a view into the text, and kept as it is would keep the
@@ -435,7 +463,7 @@ function scanBytes({ displayPath, diskPath, source }, state) {
   }
   if (holdsScreenCode) state.result.unreadScreenCode.push(displayPath);
   const notes = checkRustSourcePaths(displayPath, sourcePaths);
-  addFindings(state, [...keys.slice(0, MAX_FINDINGS_IN_BYTES), ...others.values(), ...notes], diskPath);
+  addFindings(state, [...keys.slice(0, MAX_KEYS_IN_A_FILE), ...others.values(), ...notes], diskPath);
 }
 
 function holdsZeroByte(source) {
@@ -492,7 +520,7 @@ function* walk(entry, list) {
     // A directory that should never ship is reported whole and not looked into.
     if (!current.isDirectory || strayDirectoryKind(current.name) !== null) continue;
     // Dependencies are public code, and their docs and tests carry example keys.
-    const children = list(current).filter((child) => !(child.isDirectory && child.name === 'node_modules'));
+    const children = list(current).filter((child) => !(child.isDirectory && DEPENDENCY_FOLDERS.has(child.name)));
     // The last one in is the next one out, so they go in backwards to come out as listed.
     for (let index = children.length - 1; index >= 0; index -= 1) toVisit.push(children[index]);
   }

@@ -5,6 +5,7 @@ import {
   hasLeakAtOrAbove,
   LEAK_SEVERITIES,
   RISK_LEVELS,
+  severityRank,
   SOURCE_MAP_RULES,
   STANDALONE_MAP_RULES,
   worstSeverity,
@@ -15,6 +16,8 @@ const MAX_LISTED_PATHS = 5;
 const MAX_LISTED_ADDRESSES = 10;
 const INDENT = '  ';
 const FIX_COMMAND = 'reaproof fix --yes';
+// Where a fault in Reaproof itself is reported.
+const ISSUES_URL = 'https://github.com/Junhan2/reaproof/issues';
 // How two ratings and the levels of the scale are set apart in a line. The lines are written
 // and painted by these same strings.
 const RISK_ARROW = ' → ';
@@ -67,14 +70,20 @@ const KO = {
   ownFilesIn: (count) => `앱 자신의 파일 ${count}개`,
   dependencyFilesIn: (count) => `의존 라이브러리 ${count}개`,
   forExample: (sample) => `예: ${sample}`,
-  // Listed roughly from most to least damaging: a report shows the rules in this order.
+  // Listed roughly from most to least damaging. A report shows the kinds it found worst
+  // first, and in this order where two are as bad as each other.
   rules: {
     'stray-file': {
       title: '배포물에 있으면 안 되는 파일이 섞여 있습니다',
-      body: ({ debugSymbols }) => [
-        '설정 파일, 저장소 폴더, 열쇠 보관 파일, DB 파일, 디버그 정보는 그 자체로 원본이나 비밀을 담고 있습니다.',
+      body: ({ kinds }) => [
+        ...([...kinds].some((kind) => kind !== 'finder-data')
+          ? ['설정 파일, 저장소 폴더, 열쇠 보관 파일, DB 파일, 디버그 정보는 그 자체로 원본이나 비밀을 담고 있습니다.']
+          : []),
+        ...(kinds.has('finder-data')
+          ? ['.DS_Store 는 macOS 의 Finder 가 남기는 폴더 정보로, 그 폴더에 있던 파일 이름이 들어 있습니다. 웹사이트라면 누구나 내려받아 어디에도 링크되지 않은 파일 이름까지 봅니다.']
+          : []),
         '배포물에서 빼고, 어디서 섞여 들어오는지(예: 통째로 복사되는 폴더, 묶을 파일 목록) 확인하세요.',
-        ...(debugSymbols > 0
+        ...(kinds.has('debug-symbols')
           ? ['디버그 정보(.dSYM)는 지우지 말고 배포물 밖에 보관하세요. 사용자에게서 온 오류 기록을 풀 때 씁니다.']
           : []),
       ],
@@ -96,8 +105,10 @@ const KO = {
     },
     'sourcemap-sources': {
       title: '원본 코드가 그대로 공개됩니다',
-      body: ({ files, embedded }) => [
-        `지도 파일(source map) ${files}개 안에 원본 파일 ${embedded}개의 내용이 통째로 들어 있습니다.`,
+      body: ({ files, embedded, uncounted }) => [
+        uncounted === files
+          ? `지도 파일(source map) ${files}개 안에 원본 코드가 통째로 들어 있습니다. 파일이 너무 커서 원본 파일이 몇 개인지는 세지 않았습니다.`
+          : `지도 파일(source map) ${files}개 안에 원본 파일 ${embedded}개${uncounted > 0 ? ' 이상' : ''}의 내용이 통째로 들어 있습니다.`,
         '이 파일을 내려받으면 누구나 작성한 코드를 그대로 읽습니다.',
       ],
     },
@@ -117,8 +128,10 @@ const KO = {
     },
     'sourcemap-names': {
       title: '원본 파일 이름과 구조가 공개됩니다',
-      body: ({ files, sources }) => [
-        `지도 파일(source map) ${files}개에 원본 내용은 없지만 파일 이름 ${sources}개와 위치 정보가 있습니다.`,
+      body: ({ files, sources, uncounted }) => [
+        uncounted === files
+          ? `지도 파일(source map) ${files}개에 원본 내용은 없지만 파일 이름과 위치 정보가 있습니다. 파일이 너무 커서 이름이 몇 개인지는 세지 않았습니다.`
+          : `지도 파일(source map) ${files}개에 원본 내용은 없지만 파일 이름 ${sources}개${uncounted > 0 ? ' 이상' : ''}과 위치 정보가 있습니다.`,
         '압축된 코드를 원래 구조로 되짚기가 쉬워집니다.',
       ],
     },
@@ -232,6 +245,7 @@ const KO = {
     'key-file': '열쇠 보관 파일',
     database: 'DB 파일',
     'debug-symbols': '디버그 정보: 원래 이름과 줄 번호',
+    'finder-data': 'Finder 폴더 정보: 그 폴더의 파일 이름 목록',
   },
   fixHint: '고치기: reaproof fix (배포물에서 지도 파일을 뺍니다. 되돌릴 수 있습니다)',
   inArchiveHint: '꾸러미 안의 파일은 자동으로 못 고칩니다. 빌드 설정에서 끄고 다시 빌드하세요.',
@@ -332,6 +346,10 @@ const KO = {
   },
   measureFailed: (reason) => `rea 를 실행하지 못했습니다: ${reason}`,
   usageError: (reason) => `명령을 이해하지 못했습니다: ${reason}`,
+  unknownOption: (option) => `모르는 옵션입니다: ${option}`,
+  invalidOption: (option) => `옵션을 쓰는 법이 맞지 않습니다: ${option}`,
+  internalError: (reason) =>
+    `Reaproof 자체에 오류가 나서 멈췄습니다: ${reason}\n이 문제를 아래 줄과 함께 ${ISSUES_URL} 에 알려 주세요.`,
   failOnError: (value) => `--fail-on 은 critical, high, medium 가운데 하나여야 합니다 (받은 값: ${value}).`,
   help: [
     'Reaproof: 출시물에서 쉽게 읽히는 것을 찾아 닫습니다.',
@@ -356,6 +374,7 @@ const KO = {
     '  1 --fail-on 등급 이상의 누수 있음',
     '  2 쓰는 법이 틀렸거나 대상을 정하지 못함',
     '  3 읽은 것이 없음 (열지 못한 주소, 열지 못하는 종류의 파일)',
+    `  4 Reaproof 자체의 오류 (알려 주세요: ${ISSUES_URL})`,
     '',
     'AI 에게 맡길 때:',
     '  "npx reaproof --json 을 돌리고 결과대로 고쳐 줘" 라고 하면 됩니다.',
@@ -400,14 +419,19 @@ const EN = {
   ownFilesIn: (count) => `${count} file(s) of its own`,
   dependencyFilesIn: (count) => `${count} of dependencies`,
   forExample: (sample) => `for example ${sample}`,
-  // In the same order as the Korean table, which sets the order a report shows them in.
+  // In the same order as the Korean table, which settles the order of kinds as bad as each other.
   rules: {
     'stray-file': {
       title: 'Files that should never ship are in the output',
-      body: ({ debugSymbols }) => [
-        'Settings files, repository folders, key stores, database files and debug information carry your source or your secrets as they are.',
+      body: ({ kinds }) => [
+        ...([...kinds].some((kind) => kind !== 'finder-data')
+          ? ['Settings files, repository folders, key stores, database files and debug information carry your source or your secrets as they are.']
+          : []),
+        ...(kinds.has('finder-data')
+          ? ['A .DS_Store is folder data the macOS Finder leaves behind, with the names of the files that were in the folder. On a website anyone can download it and read the names of files nothing links to.']
+          : []),
         'Take them out of what ships and find out how they get in (a folder copied whole, a packaging file list).',
-        ...(debugSymbols > 0
+        ...(kinds.has('debug-symbols')
           ? ['Do not delete the debug information (.dSYM): keep it outside what ships. It is what makes crash reports from users readable.']
           : []),
       ],
@@ -429,8 +453,10 @@ const EN = {
     },
     'sourcemap-sources': {
       title: 'Your original source code is public',
-      body: ({ files, embedded }) => [
-        `${files} source map file(s) contain the full text of ${embedded} original file(s).`,
+      body: ({ files, embedded, uncounted }) => [
+        uncounted === files
+          ? `${files} source map file(s) contain the full text of the original files. They are too large for the files to be counted.`
+          : `${files} source map file(s) contain the full text of ${uncounted > 0 ? 'at least ' : ''}${embedded} original file(s).`,
         'Anyone who downloads them reads the code exactly as you wrote it.',
       ],
     },
@@ -450,8 +476,10 @@ const EN = {
     },
     'sourcemap-names': {
       title: 'Your original file names and structure are public',
-      body: ({ files, sources }) => [
-        `${files} source map file(s) carry no source text, but they list ${sources} file name(s) and positions.`,
+      body: ({ files, sources, uncounted }) => [
+        uncounted === files
+          ? `${files} source map file(s) carry no source text, but they list file names and positions. They are too large for the names to be counted.`
+          : `${files} source map file(s) carry no source text, but they list ${uncounted > 0 ? 'at least ' : ''}${sources} file name(s) and positions.`,
         'That makes it much easier to work back from the minified code to its original structure.',
       ],
     },
@@ -569,6 +597,7 @@ const EN = {
     'key-file': 'key store',
     database: 'database file',
     'debug-symbols': 'debug information: original names and line numbers',
+    'finder-data': 'Finder folder data: the names of the files in that folder',
   },
   fixHint: 'Fix: reaproof fix (takes the map files out of the output; can be undone)',
   inArchiveHint: 'Files inside an archive cannot be fixed automatically. Turn it off in the build settings and rebuild.',
@@ -671,6 +700,10 @@ const EN = {
   },
   measureFailed: (reason) => `Could not run rea: ${reason}`,
   usageError: (reason) => `Could not understand the command: ${reason}`,
+  unknownOption: (option) => `Unknown option: ${option}`,
+  invalidOption: (option) => `This option is not used that way: ${option}`,
+  internalError: (reason) =>
+    `Reaproof itself ran into an error and stopped: ${reason}\nPlease report it at ${ISSUES_URL}, with the lines below.`,
   failOnError: (value) => `--fail-on takes critical, high or medium (got: ${value}).`,
   help: [
     'Reaproof: finds what is easy to read in what you ship, and closes it.',
@@ -695,6 +728,7 @@ const EN = {
     '  1 a leak at or above the --fail-on level',
     '  2 wrong usage, or no target could be settled on',
     '  3 nothing was read (an address that did not answer, a kind of file that cannot be opened)',
+    `  4 an error in Reaproof itself (please report it: ${ISSUES_URL})`,
     '',
     'With an AI agent:',
     '  Ask it to run "npx reaproof --json" and act on the result.',
@@ -769,6 +803,17 @@ export function createReporter(language) {
     return `- ${path}`;
   }
 
+  /**
+   * The kinds of finding a result holds, worst first, so that a reader starts with what to fix
+   * first. Kinds as bad as each other keep the order of the table.
+   */
+  function rulesWorstFirst(findingsByRule) {
+    const rankOf = (rule) => severityRank(worstSeverity(findingsByRule.get(rule)));
+    return Object.keys(t.rules)
+      .filter((rule) => findingsByRule.has(rule))
+      .sort((one, other) => rankOf(other) - rankOf(one));
+  }
+
   /** The numbers a rule's explanation speaks of, and the addresses when the rule lists addresses. */
   function summarizeRule(findings) {
     // An address list is about the addresses, not about which file each one sits in.
@@ -785,7 +830,9 @@ export function createReporter(language) {
       ...Object.fromEntries(FULLEST_COUNTS.map((field) => [field, fullest?.detail[field] ?? 0])),
       fieldNames: sumOf('swiftFieldNames'),
       builders: findings.filter(({ detail }) => detail.namesBuilder).length,
-      debugSymbols: findings.filter(({ detail }) => detail.kind === 'debug-symbols').length,
+      kinds: new Set(findings.map(({ detail }) => detail.kind)),
+      // A map too large to read whole has no counts, and the explanation says so.
+      uncounted: findings.filter(({ detail }) => detail.sourceCount === null).length,
       addresses: addresses.length,
     };
     return { addresses, totals };
@@ -963,9 +1010,8 @@ export function createReporter(language) {
       if (result.risk !== 'unrated') lines.push(`${t.leaksLabel}: ${describeLeaks(result.leaks)}`);
       lines.push('');
 
-      for (const rule of Object.keys(t.rules)) {
-        const findings = findingsByRule.get(rule);
-        if (findings) lines.push(...renderRule(rule, findings, isDeployed), '');
+      for (const rule of rulesWorstFirst(findingsByRule)) {
+        lines.push(...renderRule(rule, findingsByRule.get(rule), isDeployed), '');
       }
       if (result.findings.some(({ rule }) => SOURCE_MAP_RULES.has(rule))) {
         lines.push(...nextBuildHints(result.frameworks), '');
@@ -1028,7 +1074,9 @@ export function createReporter(language) {
      */
     explain(result) {
       const rules = {};
-      for (const [rule, findings] of groupByRule(result.findings)) {
+      const findingsByRule = groupByRule(result.findings);
+      for (const rule of rulesWorstFirst(findingsByRule)) {
+        const findings = findingsByRule.get(rule);
         rules[rule] = {
           title: t.rules[rule].title,
           explanation: t.rules[rule].body(summarizeRule(findings).totals),
@@ -1049,7 +1097,18 @@ export function createReporter(language) {
       return lines.join('\n');
     },
     measureFailed: (error) => t.measureFailed(error.message),
-    usageError: (error) => t.usageError(error.message),
+    /**
+     * Node words a command it cannot read in English, for a developer. The two errors anyone
+     * can make are said in plain words, with the option that caused them.
+     *
+     * @param {{ kind: 'unknown' | 'invalid', option: string } | null} misuse
+     */
+    usageError(error, misuse) {
+      if (misuse?.kind === 'unknown') return t.unknownOption(misuse.option);
+      if (misuse?.kind === 'invalid') return t.invalidOption(misuse.option);
+      return t.usageError(error.message);
+    },
+    internalError: (error) => t.internalError(error instanceof Error ? error.message : String(error)),
     failOnError: t.failOnError,
   };
 }

@@ -25,6 +25,9 @@ const EXIT_USAGE = 2;
 // Nothing could be read: an address that did not answer, or a target with nothing in it
 // that this scanner opens. A check that read nothing must not pass for a clean one.
 const EXIT_UNREAD = 3;
+// A fault in this tool and not in what was checked, which a release check must not take for
+// a leak found (1).
+const EXIT_INTERNAL = 4;
 
 /**
  * Everything the command needs from the outside world, so the flow can be driven by a
@@ -60,7 +63,7 @@ export async function main(argv, outside) {
     const { values } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: false });
     const report = createReporter(pickLanguage(typeof values.lang === 'string' ? values.lang : undefined));
     const wantsJson = values.json === true;
-    const reason = report.usageError(error);
+    const reason = report.usageError(error, findMisusedOption(values));
     // A person is shown how the command is used. An agent gets the reason alone.
     const message = wantsJson ? reason : `${reason}\n\n${report.help}`;
     return fail(terminal, report, wantsJson, EXIT_USAGE, { code: 'usage', message });
@@ -73,19 +76,19 @@ export async function main(argv, outside) {
   if (!LEAK_SEVERITIES.includes(options.failOn)) {
     return fail(terminal, report, options.json, EXIT_USAGE, { code: 'usage', message: report.failOnError(options.failOn) });
   }
-  if (options.help) {
-    terminal.print(report.help);
-    return EXIT_OK;
-  }
-  if (options.version) {
-    terminal.print(readPackageVersion());
-    return EXIT_OK;
-  }
 
   // `hasOwn`, not `in`: a folder named `toString` is a path, not a command.
   const command = Object.hasOwn(COMMANDS, positionals[0]) ? positionals.shift() : 'scan';
   const target = positionals[0] ?? '.';
   try {
+    if (options.help) {
+      terminal.print(report.help);
+      return EXIT_OK;
+    }
+    if (options.version) {
+      terminal.print(readPackageVersion());
+      return EXIT_OK;
+    }
     return await COMMANDS[command](target, options, report, terminal);
   } catch (error) {
     if (error instanceof ScanError) {
@@ -97,8 +100,30 @@ export async function main(argv, outside) {
       const failure = { code: 'measure-failed', message: report.measureFailed(error) };
       return fail(terminal, report, options.json, EXIT_USAGE, failure);
     }
-    throw error;
+    // A report of the fault needs where it happened, and the message asks for one.
+    const stack = error instanceof Error ? error.stack : String(error);
+    const message = report.internalError(error);
+    const failure = { code: 'internal', message: options.json ? message : `${message}\n${stack}`, stack };
+    return fail(terminal, report, options.json, EXIT_INTERNAL, failure);
   }
+}
+
+/**
+ * The option that made a command unreadable, from what a loose reading made of it and not
+ * from the words of Node's message: a name this command does not take, or a value of the
+ * wrong kind, such as `--yes=1` or `--lang` with nothing after it.
+ *
+ * @returns {{ kind: 'unknown' | 'invalid', option: string } | null}
+ */
+function findMisusedOption(values) {
+  for (const [name, value] of Object.entries(values)) {
+    const option = name.length === 1 ? `-${name}` : `--${name}`;
+    if (!Object.hasOwn(OPTIONS, name)) return { kind: 'unknown', option };
+    if (typeof value !== OPTIONS[name].type) return { kind: 'invalid', option };
+    // In `--fail-on --yes` a loose reading takes `--yes` for the value, which Node refuses.
+    if (typeof value === 'string' && value.startsWith('-')) return { kind: 'invalid', option };
+  }
+  return null;
 }
 
 /**

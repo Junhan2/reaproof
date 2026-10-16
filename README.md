@@ -137,7 +137,7 @@ On Claude Code older than 2.1.275, run `/plugin marketplace add Junhan2/reaproof
 
 ### Automatically
 
-`npx reaproof` exits with 1 when something critical or high would ship, so it can stop a release. Add it after your build step. `--fail-on medium` stops for medium findings as well, and `--fail-on critical` for critical ones only. A report that ends with exit code 1 or 3 closes with a line that says why, for whoever reads the log later. It exits with 3 when it could not read what ships, which a release check should not take for a pass.
+`npx reaproof` exits with 1 when something critical or high would ship, so it can stop a release. Add it after your build step. `--fail-on medium` stops for medium findings as well, and `--fail-on critical` for critical ones only. A report that ends with exit code 1 or 3 closes with a line that says why, for whoever reads the log later. It exits with 3 when it could not read what ships, which a release check should not take for a pass, and with 4 when Reaproof itself failed, which says nothing about your app.
 
 ## Reading the result
 
@@ -149,7 +149,7 @@ The report ends with what to do next: check first what it did not read, then fix
 
 At a terminal the rating and the kind of each finding are in color. Set `NO_COLOR` to turn color off; in a pipe, in CI and with `--json` there is none.
 
-Exit codes: 0 when no leak at the `--fail-on` level or above was found (the level is high unless you say otherwise, so a moderate result exits with 0), 1 when one was, 2 for a usage error or a target that could not be settled on, 3 when what ships could not be read (an address that did not answer, or a target with nothing in it that Reaproof opens).
+Exit codes: 0 when no leak at the `--fail-on` level or above was found (the level is high unless you say otherwise, so a moderate result exits with 0), 1 when one was, 2 for a usage error or a target that could not be settled on, 3 when what ships could not be read (an address that did not answer, or a target with nothing in it that Reaproof opens), 4 when Reaproof itself ran into an error. Please report a 4 at [Issues](https://github.com/Junhan2/reaproof/issues).
 
 ## Commands
 
@@ -180,6 +180,7 @@ The path can be a build output folder, a packaged app, a single program, or an a
 | A macOS program signed without the Hardened Runtime, or not signed at all | 🟡 Medium | No, turn it on when signing |
 | A packaged Electron app with development fuses left on (`runAsNode`, `nodeOptions`, `nodeCliInspect`) | 🟡 Medium | No, turn them off with `@electron/fuses` |
 | Source and test files packed into the app or output | 🟡 Medium | No, take them out of the packaging list |
+| A `.DS_Store` file, which the macOS Finder writes with the names of the files in its folder; on a website anyone can fetch it | 🟡 Medium | No, take it out of what ships |
 | Long text in client code that looks like an AI prompt | 🟡 Medium, a guess | No, keep prompts on a server |
 | Code that is not minified | 🟡 Medium | No, turn on minification |
 | Names that stay in a macOS or iOS program after stripping: Swift types, properties and enum cases, Objective-C classes and methods | 🔵 Note | In part: a build setting leaves out the names of Swift properties and cases, at a price. See "Native programs" |
@@ -190,15 +191,15 @@ The path can be a build output folder, a packaged app, a single program, or an a
 
 Keys that are meant for browsers, such as Stripe publishable keys and Supabase `anon` and publishable keys, are not reported. Neither is a key with the word `example` in it, which is how documentation and self-tests write a stand-in, nor the password of a database on the same machine (`localhost`, `127.0.0.1`). Secrets are never printed in full, and values from `.env` are reported by variable name only.
 
-For the `.env` comparison, Reaproof reads the `.env` files of the project the path belongs to: the nearest folder, the path itself or one above it, that holds a `package.json` or another project file such as `Package.swift` or `Cargo.toml`. The search stops short of your home folder, so a `package.json` left there does not make everything under it one project. The values are compared and never printed. Variables with a prefix their framework documents as public (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`) are expected in the output, unless the name itself says `SECRET`, `PRIVATE`, `PASSWORD` or `SERVICE_ROLE`.
+For the `.env` comparison, Reaproof reads the `.env` files of the project the path belongs to: the nearest folder, the path itself or one above it, that holds a `package.json` or another project file such as `Package.swift` or `Cargo.toml`. The search stops short of your home folder, so a `package.json` left there does not make everything under it one project. The values are compared and never printed. Variables with a prefix their framework documents as public (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`, `NUXT_PUBLIC_`, `GATSBY_`, `VUE_APP_`, `STORYBOOK_`) are expected in the output, unless the name itself says `SECRET`, `PRIVATE`, `PASSWORD` or `SERVICE_ROLE`.
 
 ## How files are read
 
-Every file under the path is read, whatever it is called. The exceptions are named in the report: containers that are not opened, and pictures, sound, video, fonts and compressed files, in which there is nothing to find. `node_modules` is not entered, because dependencies are public code.
+Every file under the path is read, whatever it is called. The exceptions are named in the report: containers that are not opened, and pictures, sound, video, fonts and compressed files, in which there is nothing to find. `node_modules` is not entered, and neither are Python's `site-packages` and `dist-packages`, because dependencies are public code. Code of your own installed into one of them as a package is passed over with them.
 
 An archive is opened and each file in it is read as if it lay on disk. A ZIP archive is told by how it opens and not by its name, so `.zip`, `.ipa`, `.apk`, `.aab`, `.jar`, `.msix` and other files in that format are all read, and so is an Electron `.asar`. An archive inside an archive is opened too, three deep, and one nested deeper is named in the report. Nothing is unpacked to disk.
 
-- JavaScript, CSS, HTML, JSON and source map files are read whole, as UTF-8 or, when the file opens with its mark, UTF-16. JavaScript gets every check in the table above. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`.
+- JavaScript, CSS, HTML, JSON and source map files are read whole, as UTF-8 or, when the file opens with its mark, UTF-16. JavaScript gets every check in the table above. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`. A source map over 30 MB is searched a piece at a time, for whether it holds source text and for values from `.env`, and its files are not counted.
 - Every other file is searched for keys and `.env` values a piece at a time. A file with no zero byte anywhere in it is text, whatever it is called: there a key has to stand apart from what is around it, and a private key is reported, as in an Apple `.p8` key file left in an app.
 - Anything else is searched as bytes: programs, bytecode, data files. A key is found there also where strings are stored end to end with nothing between them, as Rust, Go and Hermes bytecode store them, and where text is kept two bytes to a character, as Windows programs keep it.
 - A Tauri app keeps its screen code (HTML, JavaScript) compressed inside its program. The program is read and rated, but that code is not, and the report says so under the count of files read. Check it in the project folder, where `npx reaproof` reads the build output (`dist` and the like) before it is packed.
@@ -220,7 +221,7 @@ Reaproof tells a native program by how the file opens, not by its name, and read
 
 ## What the fixes change, measured
 
-Measured on 2026-10-14 with rea 6.4.0, on macOS on Apple silicon, on two small apps written for the purpose. The numbers say what a fix changes in what a tool reads. They are not a promise about your app.
+Measured on 2026-10-14 with rea 6.4.0, on macOS on Apple silicon, on two small apps written for the purpose. The numbers say what a fix changes in what a tool reads. They are not a promise about your app. On 2026-10-16 rea 6.5.0, the release `measure` now runs, gave the same counts for the web app's builds; the macOS program was not measured again.
 
 A web app: four TypeScript files bundled with Bun 1.2.19.
 
@@ -265,7 +266,7 @@ If a hosting platform builds your project from the repository, a local fix does 
 
 ## Checking a deployed site
 
-`npx reaproof https://your-site.example` reads one page and the code files that page loads from its own address, at most 60 of them, one after another. For each code file it looks for a map where the file or the server says one is, and beside the file, where a "hidden" map is written. Nothing fetched is saved.
+`npx reaproof https://your-site.example` reads one page and the code files that page loads from its own address, at most 60 of them, one after another. For each code file it looks for a map where the file or the server says one is, and beside the file, where a "hidden" map is written. Nothing fetched is saved, and a file over 30 MB is not downloaded: the report counts it as skipped.
 
 If the address you type redirects, to `www` or to `https` for example, the place it ends up is the site that gets checked. A code file that redirects to another site is not followed, and a file that names many maps is asked for the last one only, so what a page serves cannot send the check anywhere else.
 
@@ -277,7 +278,7 @@ It checks source maps only. Looking for keys and stray files is done on the buil
 
 `reaproof measure` downloads the `rea-agents` package with `npx` and runs its static JavaScript analysis on your build output only, with install scripts disabled. rea is someone else's program, so the command asks before it does that; in a script or with an AI agent, pass `--yes`. It reports how many readable source maps, original file names, server addresses, request sites and functions rea recovered. Run it before and after the fix to see the difference.
 
-It runs one fixed release of rea, 6.4.0, the one this version was tested against. A published release cannot change afterwards. Newer releases are adopted here after they have been tested.
+It runs one fixed release of rea, 6.5.0, the one this version was tested against. A published release cannot change afterwards. Newer releases are adopted here after they have been tested.
 
 ## Not covered yet
 
@@ -289,9 +290,9 @@ It runs one fixed release of rea, 6.4.0, the one this version was tested against
 - Keys written in source map and CSS files. A map that embeds your sources is reported as critical by itself, but a key in those sources is not listed with it. A map embeds the sources of dependencies too, and their documentation carries example keys, so the two have to be told apart first.
 - Which certificate signed a macOS program. An ad-hoc or development signature is not told apart from a release one.
 - Android apps, beyond what any archive gets. An `.apk` is opened and its files are searched for keys, but nothing that is Android's own is checked, and there was no real APK to try even that on.
-- Dependencies other than `node_modules`. A Python `site-packages` folder or a Ruby gem folder is read like your own files, so the notes, scripts and test keys of the libraries in it are reported as if they were yours.
-- Public-variable prefixes of frameworks other than the five listed above.
-- Very large files. A code or text file over 30 MB, any file over 512 MB inside an archive, and any other file over 1 GB are not read. The report counts them as skipped, so a source map that large goes unrated.
+- Dependencies in folders other than `node_modules`, `site-packages` and `dist-packages`. A Ruby gem folder or a copied-in library is read like your own files, so the notes, scripts and test keys of the libraries in it are reported as if they were yours.
+- Public-variable prefixes other than the nine listed above.
+- Very large files. A code or text file over 30 MB, any file over 512 MB inside an archive, and any other file over 1 GB are not read, and the report counts them as skipped. A source map over 30 MB is the exception: it is reported, without the count of its files.
 
 ## Development
 
@@ -300,6 +301,8 @@ npm test
 ```
 
 No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files and archives and run anywhere; each change is run on Linux, macOS and Windows with Node 18, 20, 22 and 24. Four more tests use the system's own tools where they are there. On a Mac with `clang` and `codesign`, two build, sign and strip throwaway programs, never start them, and check that Reaproof reads them the way `codesign` does and that `strip` takes out what was reported. Where `zip` is installed, one checks that an archive it wrote is read the same as the folder it was made from. Where `cargo` is installed, one builds a small Rust program, never starts it, and checks that the paths of its own two source files are what the note counts.
+
+The picture at the top is a run recorded in a real terminal with `docs/tools/capture.py` and drawn with `docs/tools/render-svg.mjs`. Each script says at its top how it is run.
 
 ## License
 

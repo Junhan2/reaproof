@@ -30,15 +30,24 @@ export function hasContentChecks(extension) {
   );
 }
 
+/** A map is read whole for its checks or, past the size for that, a stretch at a time. */
+export function isSourceMap(extension) {
+  return MAP_EXTENSIONS.has(extension);
+}
+
 /** JavaScript is what `measure` can show more of, so the scanner keeps count of it. */
 export function isScript(extension) {
   return SCRIPT_EXTENSIONS.has(extension);
 }
 
+/** How bad a severity is, as a number to sort by: the worse, the higher. */
+export function severityRank(severity) {
+  return SEVERITIES_ASCENDING.indexOf(severity);
+}
+
 /** @param {{ severity: Severity }[]} findings */
 export function worstSeverity(findings) {
-  const rank = (severity) => SEVERITIES_ASCENDING.indexOf(severity);
-  return findings.reduce((worst, { severity }) => (rank(severity) > rank(worst) ? severity : worst), 'info');
+  return findings.reduce((worst, { severity }) => (severityRank(severity) > severityRank(worst) ? severity : worst), 'info');
 }
 
 /** Findings grouped by the kind of problem, in the order each kind first appeared. */

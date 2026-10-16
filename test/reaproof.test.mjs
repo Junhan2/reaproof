@@ -12,7 +12,16 @@ import { applyFix, planFix, undoLastFix } from '../src/fix.mjs';
 import { toWindowsShellArgument } from '../src/measure.mjs';
 import { scanDeployedSite } from '../src/remote.mjs';
 import { collectRustSourcePaths, startRustSourcePaths } from '../src/rust.mjs';
-import { CHUNK_BYTES, FILE_COST_BYTES, MAX_UNPACKED_BYTES, OVERLAP_BYTES, scan, ScanError, withoutFiles } from '../src/scan.mjs';
+import {
+  CHUNK_BYTES,
+  FILE_COST_BYTES,
+  MAX_FILE_BYTES,
+  MAX_UNPACKED_BYTES,
+  OVERLAP_BYTES,
+  scan,
+  ScanError,
+  withoutFiles,
+} from '../src/scan.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../bin/reaproof.mjs', import.meta.url));
 const MAP_WITH_SOURCES = JSON.stringify({
@@ -1061,7 +1070,7 @@ test('measure tells a map that can be read from a pointer with no file behind it
   assert.deepEqual(JSON.parse(stdout).measurements, [
     {
       target: join(root, 'dist'),
-      reaVersion: '6.4.0',
+      reaVersion: '6.5.0',
       readableSourceMaps: 1,
       danglingMapReferences: 1,
       originalSources: ['../src/pricing.ts'],
@@ -1081,11 +1090,11 @@ test('measure runs one fixed release of rea, and only after a yes', (t) => {
   const approved = runCli(['measure', root, '--yes', '--lang', 'en'], fakeRea.env);
 
   assert.equal(unasked.status, 2);
-  assert.match(unasked.stderr, /Approval needed: measure downloads and runs rea-agents@6\.4\.0/);
+  assert.match(unasked.stderr, /Approval needed: measure downloads and runs rea-agents@6\.5\.0/);
   assert.deepEqual(callsBeforeYes, []);
   assert.equal(approved.status, 0);
   assert.deepEqual(fakeRea.readCalls(), [
-    ['-y', 'rea-agents@6.4.0', 'analyze-javascript-application', join(root, 'dist'), '--json'],
+    ['-y', 'rea-agents@6.5.0', 'analyze-javascript-application', join(root, 'dist'), '--json'],
   ]);
 });
 
@@ -1516,11 +1525,17 @@ test('a moderate result stops a release only when asked to, and the help says so
   assert.equal(unknown.status, 2);
   assert.equal(unknown.stderr, '--fail-on takes critical, high or medium (got: everything).\n');
   // A command that cannot be read is answered with how to use it, for a person; an agent gets the reason alone.
-  // The language asked for is still read out of a command that cannot be read otherwise.
+  // The language asked for is still read out of a command that cannot be read otherwise, and
+  // the reason is said in plain words and not in Node's own.
   assert.match(
     runCli(['--lang', 'en', '--no-such-option'], { REAPROOF_LANG: 'ko' }).stderr,
-    /Could not understand the command: [^\n]+\n\nReaproof: finds what is easy to read/,
+    /^Unknown option: --no-such-option\n\nReaproof: finds what is easy to read/,
   );
+  assert.match(runCli(['--lang', 'en', '--json=yes']).stderr, /^This option is not used that way: --json\n/);
+  // An option with a short name is named by its long one, and one left without its value is named too.
+  assert.match(runCli(['--lang', 'en', '--yes=1']).stderr, /^This option is not used that way: --yes\n/);
+  assert.match(runCli(['--lang', 'en', '--fail-on', '--yes']).stderr, /^This option is not used that way: --fail-on\n/);
+  assert.match(runCli(['--lang', 'ko', '--no-such-option']).stderr, /^모르는 옵션입니다: --no-such-option\n/);
   const unreadable = JSON.parse(runCli(['--no-such-option', '--json']).stdout);
   assert.equal(unreadable.exitCode, 2);
   assert.doesNotMatch(unreadable.error.message, /\n/);
@@ -2187,4 +2202,143 @@ test('at a terminal that takes color the rating and each kind of finding are col
   // A path is written as it was found: color is for the lines this tool writes.
   assert.match(output, /\n  - dist\/app\.js\.map \(originals: \.\.\/src\/pricing\.ts\)\n/);
   assert.doesNotMatch(json.printed.join('\n'), /\x1b\[/);
+});
+
+test('a fault in the tool itself ends with a code of its own and says where to report it', async (t) => {
+  const root = makeProject(t, { 'package.json': '{"scripts":{"build":"vite build"}}' });
+  // The build is agreed to, and the one who runs it fails in a way nothing here expects.
+  const terminal = makeTerminal({
+    answers: [true],
+    build: () => {
+      throw new Error('the build runner broke');
+    },
+  });
+
+  const exitCode = await main([root, '--lang', 'en'], terminal);
+
+  assert.equal(exitCode, 4);
+  // What a report of it needs, where it happened, comes after the message.
+  assert.match(
+    terminal.errors.join('\n'),
+    /^Reaproof itself ran into an error and stopped: the build runner broke\nPlease report it at https:\/\/github\.com\/Junhan2\/reaproof\/issues, with the lines below\.\nError: the build runner broke\n {4}at /,
+  );
+  assert.match(runCli(['--help', '--lang', 'en']).stdout, /\n  4 an error in Reaproof itself/);
+});
+
+test('values from .env are read the way they are written, also with a long run of spaces in one', { timeout: 10_000 }, (t) => {
+  const secret = 'pay_9fK2mQ7xL4vT8wR1zN6bY3cH5jD0sA';
+  const spaced = `abc${' '.repeat(200_000)}DEF123ghiJKL456mnoPQR789`;
+  const root = makeProject(t, {
+    'package.json': '{}',
+    // A value ends at a comment after a space, and only there.
+    '.env': [
+      `PAYMENT_SECRET=${secret}   # live key`,
+      'WEBHOOK_TOKEN=whk#0a1B2c3D4e5F6g7H8i9J0kLmNoPqR',
+      `SPACED=${spaced}`,
+    ].join('\n'),
+    'dist/app.js': `const a="${secret}",b="whk#0a1B2c3D4e5F6g7H8i9J0kLmNoPqR";\n`,
+  });
+
+  const variables = scan(root)
+    .findings.filter(({ rule }) => rule === 'env-value')
+    .map(({ detail }) => detail.variable)
+    .sort();
+
+  assert.deepEqual(variables, ['PAYMENT_SECRET', 'WEBHOOK_TOKEN']);
+});
+
+test('a value published on purpose under a documented public prefix is not a leak, unless its name says secret', (t) => {
+  const looksSecret = (index) => `pk_${index}Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0`;
+  const root = makeProject(t, {
+    'package.json': '{}',
+    '.env': [
+      `NUXT_PUBLIC_API_BASE=${looksSecret(1)}`,
+      `GATSBY_API_URL=${looksSecret(2)}`,
+      `VUE_APP_MAP_KEY=${looksSecret(3)}`,
+      `STORYBOOK_DATA_KEY=${looksSecret(4)}`,
+      `GATSBY_SECRET_TOKEN=${looksSecret(5)}`,
+    ].join('\n'),
+    'dist/app.js': [1, 2, 3, 4, 5].map((index) => `"${looksSecret(index)}"`).join(';'),
+  });
+
+  const findings = scan(root).findings.filter(({ rule }) => rule === 'env-value');
+
+  assert.deepEqual(
+    findings.map(({ severity, detail }) => [detail.variable, severity]),
+    [['GATSBY_SECRET_TOKEN', 'high']],
+  );
+});
+
+test("the Finder's folder data in what ships is reported, and Python's libraries are passed over like node_modules", (t) => {
+  const root = makeProject(t, {
+    'site/index.html': '<html></html>',
+    'site/.DS_Store': Buffer.from('\0\0\0\x01Bud1\0\0index.html'),
+    // A library's own test key and notes are its own, not the app's.
+    'App/lib/python3.12/site-packages/cryptolib/tests/keys.py': 'TEST_KEY = "-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ"\n',
+    'App/lib/python3.12/site-packages/cryptolib/README.md': '# cryptolib\n',
+    'App/lib/python3.12/dist-packages/other/notes.md': '# other\n',
+    'App/app/main.py': 'print("hello")\n',
+  });
+
+  const site = scan(join(root, 'site'));
+  const app = scan(join(root, 'App'));
+
+  assert.deepEqual(
+    site.findings.map(({ rule, severity, path, detail }) => [rule, severity, path, detail.kind]),
+    [['stray-file', 'medium', '.DS_Store', 'finder-data']],
+  );
+  assert.match(runCli([join(root, 'site'), '--lang', 'en']).stdout, /A \.DS_Store is folder data the macOS Finder leaves behind/);
+  assert.deepEqual(
+    app.findings.map(({ rule, path }) => [rule, path]),
+    [['developer-file', 'app/main.py']],
+  );
+});
+
+test('the report puts the worst kind of finding first, whatever order the kinds are written in', (t) => {
+  // A stray file is the first kind the report knows, and a .DS_Store is only a medium one.
+  const root = makeProject(t, {
+    'web/.DS_Store': Buffer.from('\0\0\0\x01Bud1\0\0app.js'),
+    'web/app.js.map': JSON.stringify({ version: 3, sources: ['../src/app.ts'], sourcesContent: ['export const r = 0.1;'] }),
+  });
+
+  const { stdout } = runCli([join(root, 'web'), '--lang', 'en']);
+
+  assert.ok(stdout.indexOf('[CRITICAL] Your original source code is public') < stdout.indexOf('[MEDIUM] Files that should never ship'));
+  // What holds for settings files and key stores is not said of a .DS_Store alone.
+  assert.doesNotMatch(stdout, /Settings files, repository folders/);
+});
+
+test('a source map too large to read whole is still judged by whether it carries the source', (t) => {
+  const secret = 'pay_7Hq2Lx9Vt4Mz8Rc1Wb6Nd3Kf';
+  // The mappings take up the room; the sources come after them, as some tools write them.
+  const padding = 'AAAA;'.repeat(Math.ceil(MAX_FILE_BYTES / 5));
+  const bigMap = (contents) =>
+    `{"version":3,"sources":["../src/pricing.ts"],"mappings":"${padding}","sourcesContent":${contents}}`;
+  const root = makeProject(t, {
+    'package.json': '{}',
+    // A value from .env is looked for in a large map as in a small one.
+    '.env': `PAYMENT_SECRET=${secret}\n`,
+    'dist/app.js': BUNDLE,
+    'dist/app.js.map': bigMap(`[null,"","export const key = \\"${secret}\\";"]`),
+    'dist/vendor.js.map': bigMap('[null,null]'),
+  });
+
+  const result = scan(root);
+
+  assert.deepEqual(
+    result.findings.map(({ rule, severity, path }) => [rule, severity, path]).sort(),
+    [
+      ['env-value', 'critical', 'dist/app.js.map'],
+      ['sourcemap-names', 'medium', 'dist/vendor.js.map'],
+      ['sourcemap-sources', 'critical', 'dist/app.js.map'],
+    ],
+  );
+  assert.equal(result.risk, 'very-high');
+  assert.deepEqual(result.skippedLargeFiles, []);
+  // Both are files that fix can take out.
+  assert.equal(planFix(result).length, 2);
+  assert.match(
+    runCli([root, '--lang', 'en']).stdout,
+    /1 source map file\(s\) contain the full text of the original files\. They are too large for the files to be counted\./,
+  );
 });

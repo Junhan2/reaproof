@@ -7,7 +7,17 @@ const DATABASE_EXTENSIONS = new Set(['.sql', '.sqlite', '.sqlite3', '.db', '.dum
 // Not application data: the thumbnail cache Windows writes next to images, and the build
 // state the Swift package manager keeps in its working folder.
 const HARMLESS_DATABASE_NAMES = new Set(['Thumbs.db', 'build.db']);
-const STRAY_SEVERITY = { env: 'critical', git: 'critical', 'key-file': 'critical', database: 'high', 'debug-symbols': 'high' };
+// The Finder writes a `.DS_Store` into each folder it shows, with the names of the files in it.
+// On a website anyone can fetch it, and with it the names of files nothing links to.
+const FINDER_DATA_NAME = '.DS_Store';
+const STRAY_SEVERITY = {
+  env: 'critical',
+  git: 'critical',
+  'key-file': 'critical',
+  database: 'high',
+  'debug-symbols': 'high',
+  'finder-data': 'medium',
+};
 
 const ALWAYS_SOURCE_EXTENSIONS = new Set(['.tsx', '.vue', '.svelte']);
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
@@ -102,6 +112,7 @@ function strayFileKind(name, extension) {
   if (isEnvFileName(name)) return 'env';
   if (KEY_FILE_NAMES.has(name) || KEY_FILE_EXTENSIONS.has(extension)) return 'key-file';
   if (DATABASE_EXTENSIONS.has(extension) && !HARMLESS_DATABASE_NAMES.has(name)) return 'database';
+  if (name === FINDER_DATA_NAME) return 'finder-data';
   return null;
 }
 
