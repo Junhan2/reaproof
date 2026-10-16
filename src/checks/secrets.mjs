@@ -22,6 +22,125 @@ const CONNECTION_STRING = {
   redact: ([, scheme, , host]) => `${scheme}://…@${host}`,
 };
 
+// A stand-in written as a run of one character, such as the Slack webhook address in Slack's
+// own documentation, which ends in twenty-four X, is no key. The random part of each key below
+// is at its end, and twenty random characters hold far more than six different ones.
+const VARIED_CHARACTERS = 20;
+const MIN_VARIETY = 6;
+// Neither is one written as a counting run, as sentry-cli's own help writes a user token.
+const COUNTING_RUN = /0123456|1234567|abcdefg/i;
+// The start of the account key of Azure's storage emulator, which Microsoft publishes for anyone to use.
+const AZURE_EMULATOR_KEY_START = 'AccountKey=Eby8vdM02xNOcqFlqUwJ';
+
+/** @param {string} [trusted] the part of the match that is certainly the key: all of it, except in bytes */
+function looksIssued(match, isNotAStandIn, trusted = match[0]) {
+  return isNotAStandIn(match) && new Set(trusted.slice(-VARIED_CHARACTERS)).size >= MIN_VARIETY && !COUNTING_RUN.test(trusted);
+}
+
+/** A key an app calls its service with while it runs, looked for in text and in bytes alike. */
+function serverKey(id, regex, more) {
+  return { id, severity: 'critical', regex, accepts: looksIssued, ...more };
+}
+
+/**
+ * A key looked for in text alone: one for publishing, deploying or running servers, which sits
+ * in settings files and scripts, or one whose prefix the names in a program spell. In bytes,
+ * where strings run into each other, none of the 71 matches of such kinds across the programs
+ * of /Applications was a key issued for the app: 61 were names, as `tfp_8sanitize` and
+ * `re_arguments_`, or stand-ins. And every kind searched in bytes costs time on every
+ * program: six more of them made the search half as long again.
+ */
+function textKey(id, regex, more) {
+  return serverKey(id, regex, { ...more, inBytes: false });
+}
+
+// Server keys of more services, each told by the prefix it is issued with. The formats are
+// those the vendors document where they do, and otherwise those that the rules of gitleaks
+// and the detectors of trufflehog record. Keys a browser is meant to hold, such as PostHog's
+// project key (phc_) and Mapbox's public token (pk.), are left out, and so are prefixes too
+// short to tell a key from other text by (Twilio's SK, Mailgun's key-, Google's AIza, which
+// its browser keys share).
+const MORE_SERVER_KEYS = [
+  // AI services.
+  serverKey('xai-key', /\bxai-[0-9A-Za-z_]{80}\b/g),
+  serverKey('groq-key', /\bgsk_[A-Za-z0-9]{52}\b/g),
+  serverKey('openrouter-key', /\bsk-or-v1-[0-9a-f]{64}\b/g),
+  textKey('replicate-token', /\br8_[0-9A-Za-z]{37}\b/g),
+  serverKey('perplexity-key', /\bpplx-[A-Za-z0-9]{48}\b/g),
+  // Made of letters alone, which Apple's Home app spells out twice in bytes.
+  textKey('huggingface-token', /\b(?:hf_|api_org_)[A-Za-z]{34}\b/g),
+  textKey('nvidia-key', /\bnvapi-[A-Za-z0-9_-]{64}[A-Za-z0-9_-]*/g),
+  textKey('pinecone-key', /\bpcsk_[A-Za-z0-9]{6}_[A-Za-z0-9]{60}[A-Za-z0-9]*/g),
+  textKey('langsmith-key', /\blsv2_(?:pt|sk)_[a-f0-9]{32}_[a-f0-9]{10}\b/g),
+  textKey('langfuse-secret', /\bsk-lf-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g),
+  // Messages and mail. Slack's tokens, as its documentation lays them out, are numbers and a
+  // secret, set apart by dashes. A webhook address lets anyone post where it leads, and nothing
+  // more; it is shown back up to the secret, which is its last part.
+  serverKey(
+    'slack-token',
+    /\b(?:xoxb-[0-9]{10}[0-9]*-[0-9]{10}[0-9]*-[A-Za-z0-9]{24}[A-Za-z0-9]*|xox[pe](?:-[0-9]{10}[0-9]*){3}-[A-Za-z0-9]{28}[A-Za-z0-9]*|xapp-[0-9]-[A-Z0-9]{9}[A-Z0-9]*-[0-9]{10}[0-9]*-[a-z0-9]{32}[a-z0-9]*)/g,
+  ),
+  serverKey('slack-webhook', /hooks\.slack\.com\/(?:services|workflows|triggers)\/[A-Za-z0-9+/]{43}[A-Za-z0-9+/]*/g, {
+    severity: 'high',
+    redact: ([value]) => `${/^hooks\.slack\.com\/\w+\/[A-Z0-9]+\/[A-Z0-9]+\//.exec(value)?.[0] ?? 'hooks.slack.com/'}…`,
+  }),
+  serverKey('discord-webhook', /discord(?:app)?\.com\/api\/webhooks\/[0-9]{17}[0-9]*\/[A-Za-z0-9_-]{60}[A-Za-z0-9_-]*/g, {
+    severity: 'high',
+    redact: ([value]) => `${/^discord(?:app)?\.com\/api\/webhooks\/[0-9]+\//.exec(value)[0]}…`,
+  }),
+  serverKey('sendgrid-key', /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}/g),
+  serverKey('brevo-key', /\bxkeysib-[a-f0-9]{64}-[A-Za-z0-9]{16}\b/g),
+  textKey('resend-key', /\bre_[1-9A-HJ-NP-Za-km-z]{8}_[1-9A-HJ-NP-Za-km-z]{24}\b/g),
+  // Payments and shops. Stripe's documentation says its signing secrets begin with whsec_, and
+  // the webhooks of Clerk and Resend, sent by Svix, use the same.
+  serverKey('webhook-secret', /\bwhsec_[A-Za-z0-9+/=]{32}[A-Za-z0-9+/=]*/g),
+  serverKey('shopify-token', /\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b/g),
+  serverKey('square-token', /\bsq0(?:atp|csp)-[0-9A-Za-z_-]{22}[0-9A-Za-z_-]*/g),
+  // Code, packages and the tools teams work in. GitLab's prefixes are those of its token documentation.
+  textKey(
+    'gitlab-token',
+    /\b(?:gl(?:pat|dt|rt|rtr|ptt|ft|imt|agent|oas|soat|ffct|wt)-[0-9A-Za-z_-]{20}[0-9A-Za-z_-]*|glcbt-[0-9A-Za-z]{1,5}_[0-9A-Za-z_-]{20}[0-9A-Za-z_-]*)/g,
+  ),
+  textKey('npm-token', /\bnpm_[A-Za-z0-9]{36}\b/g),
+  textKey('pypi-token', /\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50}[A-Za-z0-9_-]*/g),
+  textKey('rubygems-key', /\brubygems_[a-f0-9]{48}\b/g),
+  textKey('docker-token', /\bdckr_pat_[A-Za-z0-9_-]{27}/g),
+  textKey('postman-key', /\bPMAK-[a-f0-9]{24}-[a-f0-9]{34}\b/g),
+  textKey('linear-key', /\blin_api_[A-Za-z0-9]{40}\b/g),
+  textKey('notion-token', /\bntn_[0-9]{11}[A-Za-z0-9]{35}\b/g),
+  textKey('airtable-token', /\bpat[A-Za-z0-9]{14}\.[a-f0-9]{64}\b/g),
+  textKey('atlassian-token', /\bATATT3[A-Za-z0-9_=-]{180}[A-Za-z0-9_=-]*/g),
+  textKey('contentful-token', /\bCFPAT-[A-Za-z0-9_-]{43}/g),
+  textKey('typeform-token', /\btfp_[A-Za-z0-9_.=-]{59}/g),
+  // Hosting, databases and the services that run them.
+  textKey('supabase-access-token', /\bsbp_[a-z0-9]{40}\b/g),
+  textKey('digitalocean-token', /\bdo[opr]_v1_[a-f0-9]{64}\b/g),
+  textKey('planetscale-token', /\bpscale_(?:tkn|oauth|pw)_[A-Za-z0-9_=.-]{32}[A-Za-z0-9_=.-]*/g),
+  textKey('heroku-key', /\bHRKU-AA[0-9A-Za-z_-]{58}/g),
+  textKey('flyio-token', /\b(?:fo1_[A-Za-z0-9_-]{43}|fm[12][ar]?_[A-Za-z0-9+/]{100}[A-Za-z0-9+/]*={0,3})/g),
+  textKey('deno-token', /\bdd[pw]_[A-Za-z0-9]{36}\b/g),
+  textKey('databricks-token', /\bdapi[a-f0-9]{32}\b/g),
+  textKey('doppler-token', /\bdp\.(?:pt|st|sa|ct)\.[A-Za-z0-9]{40}[A-Za-z0-9]*/g),
+  textKey('vault-token', /\bhv[sb]\.[A-Za-z0-9_-]{90}[A-Za-z0-9_-]*/g),
+  textKey('tailscale-key', /\btskey-[a-z]{3,7}-[0-9A-Za-z]{6}[0-9A-Za-z]*-[0-9A-Za-z]{20}[0-9A-Za-z]*/g),
+  textKey('pulumi-token', /\bpul-[a-f0-9]{40}\b/g),
+  textKey('cloudflare-origin-ca-key', /\bv1\.0-[a-f0-9]{24}-[a-f0-9]{146}\b/g),
+  textKey('onepassword-token', /\bops_eyJ[A-Za-z0-9+/]{250}[A-Za-z0-9+/]*={0,3}/g),
+  textKey('age-key', /\bAGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}\b/g),
+  // An Alibaba Cloud key ID: four Go programs in Homebrew hold the same one in bytes.
+  textKey('alibaba-access-key', /\bLTAI[A-Za-z0-9]{20}\b/g, { severity: 'high' }),
+  textKey('azure-key', /\b(?:AccountKey=[A-Za-z0-9+/]{86}==|SharedAccessKey=[A-Za-z0-9+/]{43}=)/g, {
+    accepts: (match, ...rest) => looksIssued(match, ...rest) && !match[0].startsWith(AZURE_EMULATOR_KEY_START),
+  }),
+  // Watching and measuring.
+  textKey('sentry-token', /\b(?:sntryu_[a-f0-9]{64}\b|sntrys_eyJpYXQiO[A-Za-z0-9+/=_]{40}[A-Za-z0-9+/=_]*)/g),
+  textKey('grafana-token', /\b(?:glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}\b|glc_[A-Za-z0-9+/]{32}[A-Za-z0-9+/]*={0,3})/g),
+  textKey('newrelic-key', /\bNRAK-[A-Za-z0-9]{27}\b/g),
+  textKey('dynatrace-token', /\bdt0c01\.[A-Za-z0-9]{24}\.[A-Za-z0-9]{64}\b/g),
+  textKey('posthog-personal-key', /\bphx_[A-Za-z0-9_]{43}[A-Za-z0-9_]*/g),
+  serverKey('mapbox-secret', /\bsk\.eyJ[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*/g),
+];
+
 // Prefixes come from each vendor's key documentation. Publishable keys (pk_, sb_publishable_)
 // are meant for browsers and are deliberately absent.
 const SECRET_PATTERNS = [
@@ -50,8 +169,13 @@ const SECRET_PATTERNS = [
     // PEM form, so in bytes one is far more often theirs than the app's.
     inBytes: false,
   },
-  // Not a documented format guarantee: these are the prefixes the vendors currently issue.
-  { id: 'ai-api-key', severity: 'critical', regex: /\bsk-(?:ant|proj)-[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*/g },
+  // Not a documented format guarantee: these are the prefixes the vendors currently issue. An
+  // OpenAI key from before project keys has the word OpenAI in base64 (T3BlbkFJ) in its middle.
+  {
+    id: 'ai-api-key',
+    severity: 'critical',
+    regex: /\bsk-(?:(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*|[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20}\b)/g,
+  },
   CONNECTION_STRING,
   {
     // Supabase's legacy keys are JWTs told apart by the `role` claim: `anon` is meant for
@@ -65,6 +189,7 @@ const SECRET_PATTERNS = [
       /\beyJ(?<!\beyJ[A-Za-z0-9_-]*?eyJ)[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*/g,
     accepts: isSupabaseServiceRoleJwt,
   },
+  ...MORE_SERVER_KEYS,
 ];
 // One file full of key-shaped text is noise or an attack, not that many keys. A search stops
 // here, and so does a file read a stretch at a time.
@@ -81,11 +206,138 @@ export const MAX_KEYS_IN_A_FILE = 200;
  * @param {(value: string) => string} redact keeps enough of a key to recognise it without reprinting it
  */
 function prepareSearch(patterns, head, redact) {
-  const anySecret = new RegExp(patterns.map(({ regex }) => `(?:${regex.source})`).join('|'));
+  const anySecret = new RegExp(anyOf(patterns).source, 'g');
   // Documentation and self-tests write stand-in keys with this word in them, as AWS does in
   // AKIAIOSFODNN7EXAMPLE. No issued key spells it out by chance.
   const isNotAStandIn = ([value]) => !/example/i.test(value.slice(0, head.judged));
-  return { patterns, anySecret, isNotAStandIn, sameLength: head.same, redact: ([value]) => redact(value) };
+  // Each pattern is also tried at a given place alone, where the combined one matched.
+  const tried = patterns.map((pattern) => ({ ...pattern, atPlace: new RegExp(pattern.regex.source, 'y') }));
+  return { patterns: tried, anySecret, isNotAStandIn, sameLength: head.same, redact: ([value]) => redact(value) };
+}
+
+// Past this many places where the combined pattern matches, each pattern searches the whole
+// text instead: trying one place costs about as much as searching 230 characters.
+const MAX_PLACES = 1000;
+
+/** @returns {number[] | null} where in the text some pattern matches, or null for more than the limit */
+function placesOf(anySecret, text) {
+  const places = [];
+  anySecret.lastIndex = 0;
+  for (let found = anySecret.exec(text); found; found = anySecret.exec(text)) {
+    if (places.length === MAX_PLACES) return null;
+    places.push(found.index);
+    anySecret.lastIndex = found.index + 1;
+  }
+  return places;
+}
+
+/** What `text.matchAll` gives for a pattern, found by trying it only at the places given. */
+function* matchesAt(atPlace, text, places) {
+  let from = 0;
+  for (const place of places) {
+    if (place < from) continue;
+    atPlace.lastIndex = place;
+    const match = atPlace.exec(text);
+    if (!match) continue;
+    from = place + match[0].length;
+    yield match;
+  }
+}
+
+/**
+ * One pattern that holds wherever any of `patterns` does, written to be quick to rule out. A
+ * regular expression tries each of its choices in turn at every place in the text, so a choice
+ * a pattern opens with is taken apart, the openings that start with the same character become
+ * one choice that tries them after it, and those at the start of a word share that one test.
+ */
+function anyOf(patterns) {
+  const atWordStart = new Map();
+  const anywhere = new Map();
+  const others = [];
+  for (const source of patterns.flatMap(({ regex }) => openingsOf(regex.source))) {
+    const opening = /^(\\b)?([A-Za-z0-9-])(?![*+?{])/.exec(source);
+    if (!opening || choicesOf(source).length > 1) {
+      others.push(`(?:${source})`);
+      continue;
+    }
+    const [head, boundary, character] = opening;
+    const byCharacter = boundary ? atWordStart : anywhere;
+    byCharacter.set(character, [...(byCharacter.get(character) ?? []), `(?:${source.slice(head.length)})`]);
+  }
+  const choices = (byCharacter) => [...byCharacter].map(([character, rests]) => `${character}(?:${rests.join('|')})`);
+  const wordStart = atWordStart.size > 0 ? [`\\b(?:${choices(atWordStart).join('|')})`] : [];
+  return new RegExp([...wordStart, ...choices(anywhere), ...others].join('|'));
+}
+
+/** A pattern's source as one for each choice it opens with: `\b(?:sk|rk)_live_` as `\bsk_live_` and `\brk_live_`. */
+function openingsOf(source) {
+  const boundary = source.startsWith('\\b') ? '\\b' : '';
+  const rest = source.slice(boundary.length);
+  // A group that is not a lookaround, and that no count follows.
+  const group = /^\((?:\?:)?(?!\?)/.exec(rest);
+  if (!group) return [source];
+  const choices = choicesOf(rest.slice(group[0].length));
+  // Joined back, the choices are what the group holds, so its `)` comes right after them.
+  const after = rest.slice(group[0].length + choices.join('|').length + 1);
+  if (/^[*+?{]/.test(after)) return [source];
+  return choices.map((choice) => `${boundary}${choice}${after}`);
+}
+
+/**
+ * The fewest characters a match of a pattern's source can have. In bytes it is the part of a
+ * match that is certainly the key: what follows may be whatever was stored next.
+ */
+function fixedLength(source) {
+  const choices = choicesOf(source);
+  if (choices.length > 1) return Math.min(...choices.map(fixedLength));
+  let total = 0;
+  for (let at = 0; at < source.length; ) {
+    let atom = 1;
+    if (source[at] === '\\') {
+      atom = /[bB]/.test(source[at + 1]) ? 0 : 1;
+      at += 2;
+    } else if (source[at] === '[') {
+      let end = at + 1;
+      while (source[end] !== ']') end += source[end] === '\\' ? 2 : 1;
+      at = end + 1;
+    } else if (source[at] === '(') {
+      // A lookaround matches no character of its own.
+      const [opening] = /^\((?:\?(?::|<?[=!]))?/.exec(source.slice(at));
+      const inside = choicesOf(source.slice(at + opening.length));
+      atom = /[=!]$/.test(opening) ? 0 : Math.min(...inside.map(fixedLength));
+      at += opening.length + inside.join('|').length + 1;
+    } else {
+      at += 1;
+    }
+    const count = /^(?:[*?+]|\{(\d+)(?:,\d*)?\})\??/.exec(source.slice(at));
+    if (count) {
+      atom *= '*?'.includes(count[0][0]) ? 0 : count[0][0] === '+' ? 1 : Number(count[1]);
+      at += count[0].length;
+    }
+    total += atom;
+  }
+  return total;
+}
+
+/** The choices of a source at its top level, outside any group, up to the `)` of a group it is inside. */
+function choicesOf(source) {
+  const choices = [];
+  let depth = 0;
+  let isInClass = false;
+  let start = 0;
+  for (let at = 0; at < source.length; at += 1) {
+    const character = source[at];
+    if (character === '\\') at += 1;
+    else if (isInClass) isInClass = character !== ']';
+    else if (character === '[') isInClass = true;
+    else if (character === '(') depth += 1;
+    else if (character === ')' && --depth < 0) return [...choices, source.slice(start, at)];
+    else if (character === '|' && depth === 0) {
+      choices.push(source.slice(start, at));
+      start = at + 1;
+    }
+  }
+  return [...choices, source.slice(start)];
 }
 
 // In text a match ends where the key ends.
@@ -122,14 +374,14 @@ const EDGE_CHARACTERS = ENCODED_REACH;
 
 // In the bytes of a program or of bytecode, strings are often stored end to end with nothing
 // between them (Rust, Go and Hermes do). A key need not start at a word boundary there, and
-// a match can run on into whatever was stored next, so only its head counts: 24 characters
-// are the shortest key these patterns take, and a stand-in says so within 40.
+// a match can run on into whatever was stored next, so only its head counts: what every match
+// of its pattern holds, and at least 24 characters, the shortest key these patterns take, to
+// tell one key from another, and 40, within which a stand-in says it is one.
 const BYTE_SEARCH = prepareSearch(
-  SECRET_PATTERNS.filter(({ inBytes }) => inBytes !== false).map(({ inBytes, ...pattern }) => ({
-    ...pattern,
-    ...inBytes,
-    regex: new RegExp(pattern.regex.source.replaceAll('\\b', ''), 'g'),
-  })),
+  SECRET_PATTERNS.filter(({ inBytes }) => inBytes !== false).map(({ inBytes, ...pattern }) => {
+    const source = pattern.regex.source.replaceAll('\\b', '');
+    return { ...pattern, ...inBytes, regex: new RegExp(source, 'g'), trustedLength: fixedLength(source) };
+  }),
   { judged: 40, same: 24 },
   (value) => `${value.slice(0, 12)}…`,
 );
@@ -159,18 +411,21 @@ export function checkSecretsInBytes(path, text, place, seen) {
 }
 
 function search({ patterns, anySecret, isNotAStandIn, sameLength, redact: redactHead }, path, text, place, seen) {
-  if (!anySecret.test(text)) return [];
+  // Most shipped files hold no key at all, and are done with in one pass. A key can start only
+  // where the combined pattern matches, so each pattern is tried there and not all over.
+  const places = placesOf(anySecret, text);
+  if (places?.length === 0) return [];
 
   const findings = [];
-  for (const { id, severity, regex, accepts = isNotAStandIn, redact = redactHead } of patterns) {
-    for (const match of text.matchAll(regex)) {
+  for (const { id, severity, regex, atPlace, accepts = isNotAStandIn, redact = redactHead, trustedLength = Infinity } of patterns) {
+    for (const match of places ? matchesAt(atPlace, text, places) : text.matchAll(regex)) {
       const [value] = match;
       // At an edge where the file goes on, a match may be cut in two or stand without what
       // is around it. It is left to the stretch next to this one.
       if (place.hasMoreBefore && match.index < EDGE_CHARACTERS) continue;
       if (place.hasMoreAfter && match.index + value.length + EDGE_CHARACTERS > text.length) continue;
-      const key = value.slice(0, sameLength);
-      if (seen.has(key) || !accepts(match, isNotAStandIn)) continue;
+      const key = value.slice(0, Math.max(sameLength, trustedLength));
+      if (seen.has(key) || !accepts(match, isNotAStandIn, value.slice(0, trustedLength))) continue;
       // A name in code can hold a key's opening by chance, as `risk_live_` does. Stuck to
       // the end of another word, a match counts only with a digit in it, which a name of
       // that kind lacks and an issued key all but always has.

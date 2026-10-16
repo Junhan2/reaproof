@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { withoutTokens } from './checks/content.mjs';
 import { toShownText } from './text.mjs';
 
 // The release of rea this version was tested against. A published release cannot change
@@ -81,10 +82,11 @@ function summarizeEvidence(evidence) {
     .map((node) => node.identity?.original_source)
     .filter((source) => typeof source === 'string')
     .map(toShownText);
+  // An address that ends in a token, as a webhook's does, is shown without it.
   const urls = ofKind(semanticNodes, 'literal')
     .map((node) => node.properties?.value)
     .filter((value) => typeof value === 'string' && /^https?:\/\//.test(value))
-    .map(toShownText);
+    .map((value) => withoutTokens(toShownText(value)));
 
   return {
     readableSourceMaps: sourceMapNodes.length - danglingMapReferences,

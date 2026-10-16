@@ -15,6 +15,14 @@ const RELATIVE_API_PATH = /["'`](\/(?:api|graphql|rest|rpc)\b[A-Za-z0-9_\-./:[\]
 const API_HOST = /^api[.-]|[.-]api[.-]/i;
 const API_PATH = /(?:^|\/)(?:api|graphql|rest|rpc|v\d{1,2})(?:\/|$)/i;
 const MAX_ADDRESSES_PER_FILE = 50;
+// A long part of an address's path in which letters and digits change places again and again
+// is shown as `…`: a key or a token is random so, as the one a Discord webhook or a Telegram
+// bot ends in is. In the 1,793 addresses of /Applications, names and file names with a version
+// in them, such as `JetBrainsMono-Bold.woff2`, changed once or not at all, and the 7 parts that
+// changed four times or more were all random, hashes or tokens.
+const LONG_PATH_PART = /(?<=\/)[^/]{20}[^/]*/g;
+const LETTER_DIGIT_CHANGE = /[A-Za-z](?=\d)|\d(?=[A-Za-z])/g;
+const MIN_TOKEN_CHANGES = 4;
 
 // A prompt assigns a role and then gives orders. Library warnings ("You are using an outdated
 // version...") do the first half only, so both halves are required.
@@ -46,17 +54,25 @@ function holdsCode(text) {
 
 /**
  * Lists the server addresses a code file names. They cannot be hidden, so this is a note
- * for the owner to review, not a leak.
+ * for the owner to review, not a leak. A part of a path shaped like a token is not shown.
  */
 export function checkEndpoints(path, text) {
   const addresses = new Set();
   for (const [address] of text.matchAll(ABSOLUTE_ADDRESS)) {
-    if (looksLikeApi(address)) addresses.add(address);
+    if (looksLikeApi(address)) addresses.add(withoutTokens(address));
   }
-  for (const [, apiPath] of text.matchAll(RELATIVE_API_PATH)) addresses.add(apiPath);
+  for (const [, apiPath] of text.matchAll(RELATIVE_API_PATH)) addresses.add(withoutTokens(apiPath));
   if (addresses.size === 0) return [];
   const listed = [...addresses].slice(0, MAX_ADDRESSES_PER_FILE);
   return [{ rule: 'endpoint', severity: 'info', path, detail: { addresses: listed } }];
+}
+
+/** An address with each part of its path that is shaped like a token shown as `…`. Its host stays. */
+export function withoutTokens(address) {
+  const pathStart = address.indexOf('/', address.indexOf('//') + 2);
+  if (pathStart === -1) return address;
+  const isTokenLike = (part) => (part.match(LETTER_DIGIT_CHANGE)?.length ?? 0) >= MIN_TOKEN_CHANGES;
+  return address.slice(0, pathStart) + address.slice(pathStart).replace(LONG_PATH_PART, (part) => (isTokenLike(part) ? '…' : part));
 }
 
 /**
