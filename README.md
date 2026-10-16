@@ -139,9 +139,27 @@ On Claude Code older than 2.1.275, run `/plugin marketplace add Junhan2/reaproof
 
 `npx reaproof` exits with 1 when something critical or high would ship, so it can stop a release. Add it after your build step. `--fail-on medium` stops for medium findings as well, and `--fail-on critical` for critical ones only. A report that ends with exit code 1 or 3 closes with a line that says why, for whoever reads the log later. It exits with 3 when it could not read what ships, which a release check should not take for a pass, and with 4 when Reaproof itself failed, which says nothing about your app.
 
+With `--sarif` the result is printed as SARIF 2.1.0, the format GitHub code scanning and other review tools read: one rule for each kind of finding, with the report's own explanation, and one result for each finding. A result points at the file, or at the archive the file is in, as a path from the folder that was checked, and at the address of the file on a deployed site. GitHub places a result on a file only when that file is in the repository, so for a build output that is not committed the alert shows without a place in the code. The exit code is the same as without `--sarif`, so the step below still stops the job, and the upload after it runs whether it stopped or not:
+
+```yaml
+permissions:
+  security-events: write
+steps:
+  - uses: actions/checkout@v7
+  - uses: actions/setup-node@v7
+  - run: npm ci && npm run build
+  - run: npx reaproof --sarif > reaproof.sarif
+  - uses: github/codeql-action/upload-sarif@v4
+    if: ${{ !cancelled() }}
+    with:
+      sarif_file: reaproof.sarif
+```
+
+To leave out files you know about, list them in `.reaproofignore` in the project folder, one pattern to a line as in `.gitignore`: `#` starts a comment, `*` stands for any part of a name and `**` for any number of folders, a pattern that ends with `/` is for folders only, and one with a `/` before its end counts from the project folder. A line that starts with `!` is not read, so what a pattern leaves out stays out. Inside an archive a file's path is the archive's, `/`, then its path inside: `dist/app.zip/samples/` leaves out the `samples` folder in that archive. What a pattern leaves out is not read at all, and the report names it under the count of files read, so nothing goes quiet without a word.
+
 ## Reading the result
 
-Right under the count of files read, the report says what it met and did not read: disk images and installers it does not open, archives it could not read, files it could not open (no permission, a password, a kind of compression it does not undo), files too large to read, the screen code inside a Tauri app, and how many files it passed over because there is nothing to find in them (pictures, sound, video, fonts, compressed files). The result is "not rated", never "baseline", when no file's content could be read, and also when something was left unread and no program or script was read beside it: what ships is then most likely in what was left.
+Right under the count of files read, the report says what it met and did not read: disk images and installers it does not open, archives it could not read, files it could not open (no permission, a password, a kind of compression it does not undo), folders it had no permission to open, files too large to read, files over 30 MB that it searched for keys alone, the screen code inside a Tauri app, what `.reaproofignore` left out, and how many files it passed over because there is nothing to find in them (pictures, sound, video, fonts, compressed files). The result is "not rated", never "baseline", when no file's content could be read, and also when something was left unread and no program or script was read beside it: what ships is then most likely in what was left.
 
 Under the rea risk, one line shows every level with the result's own in brackets. Below it, the report counts kinds of leak, each at its worst severity. Three hundred exposed maps are the same mistake as one. Notes are not counted.
 
@@ -161,7 +179,7 @@ Exit codes: 0 when no leak at the `--fail-on` level or above was found (the leve
 | `reaproof undo [path]` | Puts back what the last fix took out |
 | `reaproof measure [path]` | Runs the real rea on the output and counts what it reads |
 
-Options: `--json` for machine-readable output, `--yes` to skip the question in `fix` and `measure`, `--fail-on critical|high|medium` for the mildest leak that makes the exit code 1, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
+Options: `--json` for machine-readable output, `--sarif` for SARIF output from a scan (see "Automatically"), `--yes` to skip the question in `fix` and `measure`, `--fail-on critical|high|medium` for the mildest leak that makes the exit code 1, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
 
 The path can be a build output folder, a packaged app, a single program, or an archive such as a `.zip`, an `.ipa` or an Electron `.asar`, and it is scanned as given. Only a JavaScript project folder, one with a `package.json`, is searched for its output: Reaproof looks there for `.next/static`, `out`, `dist`, `build`, `release` and `.output/public`, and the report says the folders were picked by name. For a project in another language (a folder with `Package.swift`, an Xcode project, `Cargo.toml`, `go.mod` and the like) it does not guess where the build went. Point it at the thing that ships, for example the `.app`.
 
@@ -209,11 +227,11 @@ For the `.env` comparison, Reaproof reads the `.env` files of the project the pa
 
 ## How files are read
 
-Every file under the path is read, whatever it is called. The exceptions are named in the report: containers that are not opened, and pictures, sound, video, fonts and compressed files, in which there is nothing to find. `node_modules` is not entered, and neither are Python's `site-packages` and `dist-packages` nor the `packages` folder beside Flutter's asset manifests, in an app or a web build, because dependencies are public code. Code of your own installed into one of them as a package is passed over with them.
+Every file under the path is read, whatever it is called. The exceptions are named in the report: containers that are not opened, folders with no permission to open them, and pictures, sound, video, fonts and compressed files, in which there is nothing to find. `node_modules` is not entered, and neither are Python's `site-packages` and `dist-packages` nor the `packages` folder beside Flutter's asset manifests, in an app or a web build, because dependencies are public code. Code of your own installed into one of them as a package is passed over with them.
 
 An archive is opened and each file in it is read as if it lay on disk. A ZIP archive is told by how it opens and not by its name, so `.zip`, `.ipa`, `.apk`, `.aab`, `.jar`, `.msix` and other files in that format are all read, and so is an Electron `.asar`. A tar archive (`.tar`, `.tgz`, `.tar.gz`), as `npm pack` writes a package and many Linux programs ship, is opened too; one compressed with gzip is unpacked in memory, up to 512 MB, and what it unpacks to counts against what may be read out of an archive it sits in. An archive inside an archive is opened too, three deep, and one nested deeper is named in the report. A file that an ASAR's header gives no size or place a reader can go by, as one shipping app has to stop tools that unpack every file, is listed as unread, and the rest of the archive is read. Nothing is unpacked to disk.
 
-- JavaScript, CSS, HTML, JSON and source map files are read whole, as UTF-8 or, when the file opens with its mark, UTF-16. JavaScript gets every check in the table above, and so does the bundle React Native writes an app's code to (`index.android.bundle` and `main.jsbundle`, or another name the build gives it that ends in `.bundle` or `.jsbundle`) when it is JavaScript: with no zero byte in it, as Hermes bytecode has in its header. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`. A source map over 30 MB is searched a piece at a time, for whether it holds source text and for values from `.env`, and its files are not counted.
+- JavaScript, CSS, HTML, JSON and source map files are read whole, as UTF-8 or, when the file opens with its mark, UTF-16. JavaScript gets every check in the table above, and so does the bundle React Native writes an app's code to (`index.android.bundle` and `main.jsbundle`, or another name the build gives it that ends in `.bundle` or `.jsbundle`) when it is JavaScript: with no zero byte in it, as Hermes bytecode has in its header. In CSS and source map files a key is not looked for by its shape, only as a value from `.env`. A source map over 30 MB is searched a piece at a time, for whether it holds source text and for values from `.env`, and its files are not counted. Any other of these files over 30 MB is searched a piece at a time for keys and `.env` values alone, as other files are, and the report names it: a map appended to its code is not read.
 - Every other file is searched for keys and `.env` values a piece at a time. A file with no zero byte anywhere in it is text, whatever it is called: there a key has to stand apart from what is around it, and a private key is reported, as in an Apple `.p8` key file left in an app.
 - Anything else is searched as bytes: programs, bytecode, data files. A key is found there also where strings are stored end to end with nothing between them, as Rust, Go and Hermes bytecode store them, and where text is kept two bytes to a character, as Windows programs keep it.
 - A Tauri app keeps its screen code (HTML, JavaScript) compressed inside its program. The program is read and rated, but that code is not, and the report says so under the count of files read. Check it in the project folder, where `npx reaproof` reads the build output (`dist` and the like) before it is packed.
@@ -288,7 +306,7 @@ Reaproof does not make an app impossible to copy. Nothing can.
 
 ## How the fix works
 
-The fix moves standalone `.map` files out of the build output into `~/.reaproof/backups/`, outside your project, so a backup is never deployed by accident. It never edits your code files, because changing them would break integrity hashes. `reaproof undo` moves the files back.
+The fix moves standalone `.map` files out of the build output into `~/.reaproof/backups/`, outside your project, so a backup is never deployed by accident. It never edits your code files, because changing them would break integrity hashes. `reaproof undo` moves the files back. A map that cannot be moved, because its folder is locked or another program holds it, is left where it is and named, the others are still moved, and the rating after the fix counts what was left.
 
 The next build creates the maps again unless you turn them off. The report tells you which setting to change for Next.js, Vite and Create React App.
 
@@ -296,7 +314,7 @@ If a hosting platform builds your project from the repository, a local fix does 
 
 ## Checking a deployed site
 
-`npx reaproof https://your-site.example` reads one page and the code files that page loads from its own address, at most 60 of them, one after another. For each code file it looks for a map where the file or the server says one is, and beside the file, where a "hidden" map is written. Nothing fetched is saved, and a file over 30 MB is not downloaded: the report counts it as skipped.
+`npx reaproof https://your-site.example` reads one page and the code files that page loads from its own address, at most 60 of them, one after another. For each code file it looks for a map where the file or the server says one is, and beside the file, where a "hidden" map is written. Nothing fetched is saved. A code file over 30 MB and a map over 256 MB are not downloaded: the report counts them as skipped. A map between the two is read a piece at a time, as a large map on disk is.
 
 If the address you type redirects, to `www` or to `https` for example, the place it ends up is the site that gets checked. A code file that redirects to another site is not followed, and a file that names many maps is asked for the last one only, so what a page serves cannot send the check anywhere else.
 
@@ -323,7 +341,8 @@ It runs one fixed release of rea, 6.5.0, the one this version was tested against
 - The settings of an Android app's network security or backups, and the names of methods and fields in DEX code: only class names are counted. Nor is an app's code outside its own package: an app built from many modules may keep most of it elsewhere (Thunderbird 24.0 keeps 16 classes under its package name and over 3,000 under others), and only those 16 are counted.
 - Dependencies in folders other than `node_modules`, `site-packages` and `dist-packages`. A Ruby gem folder or a copied-in library is read like your own files, so the notes, scripts and test keys of the libraries in it are reported as if they were yours.
 - Public-variable prefixes other than the nine listed above.
-- Very large files. A code or text file over 30 MB, any file over 512 MB inside an archive, and any other file over 1 GB are not read, and the report counts them as skipped. A source map over 30 MB is the exception: it is reported, without the count of its files.
+- Very large files. A code or text file over 30 MB is searched for keys and `.env` values alone, and the report names it: a map appended to its code is not read, nor are the other checks of the table above made. Any file over 512 MB inside an archive and any other file over 1 GB are not read, and the report counts them as skipped. A source map over 30 MB is reported, without the count of its files.
+- `!` lines in `.reaproofignore`, which in `.gitignore` take a file back in. Here what a pattern leaves out stays out. A pattern with a `/` or `**` in it is not matched against a path longer than 1,024 characters, which only an archive made to cost time holds; what lies there is read.
 
 ## Development
 

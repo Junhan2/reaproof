@@ -406,6 +406,10 @@ const KO = {
   unreadableArchives: (count, names) => `읽지 못한 꾸러미 ${count}개(${names}): 손상됐거나 이 도구가 읽지 못하는 꼴입니다.`,
   unreadableFiles: (count, names) =>
     `열지 못한 파일 ${count}개(${names}): 권한이 없거나, 암호가 걸렸거나, 이 도구가 풀지 못하는 방식으로 압축됐거나, 꾸러미에 적힌 것과 다릅니다.`,
+  unreadableFolders: (count, names) => `열지 못한 폴더 ${count}개(${names}): 권한이 없어 안을 보지 못했습니다.`,
+  keysOnlyFiles: (count, names) =>
+    `30MB 가 넘어 열쇠와 .env 값만 찾은 파일 ${count}개(${names}): 코드 끝에 붙은 지도 같은 나머지 점검은 하지 않았습니다.`,
+  ignored: (count, names) => `.reaproofignore 에 적힌 대로 읽지 않은 것 ${count}개(${names})`,
   unopenedContainers: (count, names) =>
     `열지 못한 꾸러미 ${count}개(${names}): 이 종류는 안을 읽지 못합니다. 안에 든 앱이나 폴더를 꺼내 직접 가리켜 주세요.`,
   nestedTooDeep: (count, names) =>
@@ -456,6 +460,8 @@ const KO = {
   cancelled: '취소했습니다. 바뀐 것은 없습니다.',
   nothingToFix: '자동으로 뺄 지도 파일이 없습니다.',
   fixDone: (count) => `완료: ${count}개를 뺐습니다.`,
+  fixFailed: (count, names) =>
+    `옮기지 못한 지도 파일 ${count}개(${names}): 권한이 없거나 다른 프로그램이 쓰는 중입니다. 그 자리에 그대로 두었습니다.`,
   backupAt: (directory) => `보관 위치: ${directory}`,
   undoHint: '되돌리기: reaproof undo',
   nothingToUndo: '되돌릴 것이 없습니다.',
@@ -485,6 +491,7 @@ const KO = {
   internalError: (reason) =>
     `Reaproof 자체에 오류가 나서 멈췄습니다: ${reason}\n이 문제를 아래 줄과 함께 ${ISSUES_URL} 에 알려 주세요.`,
   failOnError: (value) => `--fail-on 은 critical, high, medium 가운데 하나여야 합니다 (받은 값: ${value}).`,
+  sarifError: '--sarif 는 점검에만 쓰고, --json 과 함께 쓰지 않습니다.',
   help: [
     'Reaproof: 출시물에서 쉽게 읽히는 것을 찾아 닫습니다.',
     '',
@@ -497,6 +504,7 @@ const KO = {
     '',
     '옵션:',
     '  --json         결과를 JSON 으로 출력',
+    '  --sarif        결과를 SARIF 로 출력 (GitHub 코드 스캐닝 등)',
     '  -y, --yes      fix 와 measure 를 묻지 않고 진행',
     '  --fail-on 등급 이 등급부터 종료 코드 1 (critical, high, medium 중 하나. 기본은 high)',
     '  --lang ko|en   출력 언어',
@@ -893,6 +901,10 @@ const EN = {
     `Archives that could not be read: ${count} (${names}). Damaged, or laid out in a way this scanner does not read.`,
   unreadableFiles: (count, names) =>
     `Files that could not be opened: ${count} (${names}). No permission, a password, a kind of compression this scanner does not undo, or not what its archive says it is.`,
+  unreadableFolders: (count, names) => `Folders that could not be opened: ${count} (${names}). There was no permission to look inside.`,
+  keysOnlyFiles: (count, names) =>
+    `Files over 30 MB, searched for keys and .env values only: ${count} (${names}). The other checks, such as for a map appended to the code, were not made.`,
+  ignored: (count, names) => `Not read, as .reaproofignore says: ${count} (${names})`,
   unopenedContainers: (count, names) =>
     `Containers that could not be opened: ${count} (${names}). This scanner does not read inside this kind. Take out the app or folder inside and point at that.`,
   nestedTooDeep: (count, names) =>
@@ -944,6 +956,8 @@ const EN = {
   cancelled: 'Cancelled. Nothing was changed.',
   nothingToFix: 'There are no map files to take out automatically.',
   fixDone: (count) => `Done: ${count} taken out.`,
+  fixFailed: (count, names) =>
+    `Map files that could not be moved: ${count} (${names}). No permission, or another program is using them. They were left where they are.`,
   backupAt: (directory) => `Kept at: ${directory}`,
   undoHint: 'Undo: reaproof undo',
   nothingToUndo: 'There is nothing to undo.',
@@ -973,6 +987,7 @@ const EN = {
   internalError: (reason) =>
     `Reaproof itself ran into an error and stopped: ${reason}\nPlease report it at ${ISSUES_URL}, with the lines below.`,
   failOnError: (value) => `--fail-on takes critical, high or medium (got: ${value}).`,
+  sarifError: '--sarif works with a scan only, and not together with --json.',
   help: [
     'Reaproof: finds what is easy to read in what you ship, and closes it.',
     '',
@@ -985,6 +1000,7 @@ const EN = {
     '',
     'Options:',
     '  --json         print results as JSON',
+    '  --sarif        print the result as SARIF (for GitHub code scanning and the like)',
     '  -y, --yes      run fix and measure without asking',
     '  --fail-on LEVEL  exit with 1 from this level up (critical, high or medium; high by default)',
     '  --lang ko|en   output language',
@@ -1025,6 +1041,7 @@ export function createReporter(language) {
   const capWith = (items, limit, toLast) =>
     items.length <= limit ? items : [...items.slice(0, limit), toLast(items.length - limit)];
   const capList = (lines, limit) => capWith(lines, limit, (count) => `- ${t.andMore(count)}`);
+  const named = (paths) => capWith(paths, MAX_LISTED_PATHS, t.andMore).join(', ');
   const withSample = (fact, sample) => (sample ? `${fact}, ${t.forExample(sample)}` : fact);
   // How the lines that are painted at a terminal open. Each is written by these, and found by them.
   const tagOf = (severity) => `[${t.severity[severity]}]`;
@@ -1041,47 +1058,47 @@ export function createReporter(language) {
   }
 
   function describeFinding({ rule, path, detail }) {
-    if (rule === 'secret') return `- ${path}: ${t.secretLabels[detail.secretId]} ${detail.redacted}`;
-    if (rule === 'env-value') return `- ${detail.variable} (${detail.envFile}) → ${path}`;
-    if (rule === 'stray-file') return `- ${path} (${t.strayKinds[detail.kind]})`;
-    if (rule === 'electron-fuse') return `- ${path}: ${detail.enabled.join(', ')}`;
-    if (rule === 'electron-asar-integrity') return `- ${path}: ${detail.disabled.join(', ')}`;
-    if (rule === 'prompt-candidate') return `- ${path}: "${detail.preview}…"`;
-    if (rule === 'macos-entitlement') return `- ${path}: ${detail.entitlements.join(', ')}`;
+    if (rule === 'secret') return `${path}: ${t.secretLabels[detail.secretId]} ${detail.redacted}`;
+    if (rule === 'env-value') return `${detail.variable} (${detail.envFile}) → ${path}`;
+    if (rule === 'stray-file') return `${path} (${t.strayKinds[detail.kind]})`;
+    if (rule === 'electron-fuse') return `${path}: ${detail.enabled.join(', ')}`;
+    if (rule === 'electron-asar-integrity') return `${path}: ${detail.disabled.join(', ')}`;
+    if (rule === 'prompt-candidate') return `${path}: "${detail.preview}…"`;
+    if (rule === 'macos-entitlement') return `${path}: ${detail.entitlements.join(', ')}`;
     if (rule === 'macos-runtime') {
       // Written the way `codesign -dv` shows it, so the two can be put side by side.
       const slices = detail.slices.map(({ architecture, flags }) => `${architecture}: ${flags ? `flags=${flags}` : t.notSigned}`);
-      return `- ${path} (${slices.join('; ')})`;
+      return `${path} (${slices.join('; ')})`;
     }
     if (rule === 'native-symbols') {
       const facts = [t.namesIn(detail.architecture, detail.names)];
       if (detail.sourceCount > 0) facts.push(t.sourcesIn(detail.sourceCount, detail.sampleSources[0]));
-      return `- ${path} (${facts.join(', ')})`;
+      return `${path} (${facts.join(', ')})`;
     }
-    if (rule === 'debug-file-path') return `- ${path} (${t.debugFileIn(detail.debugFile)})`;
-    if (rule === 'android-debug-build') return `- ${path}: ${[detail.appPackage, ...detail.kinds].filter(Boolean).join(' · ')}`;
+    if (rule === 'debug-file-path') return `${path} (${t.debugFileIn(detail.debugFile)})`;
+    if (rule === 'android-debug-build') return `${path}: ${[detail.appPackage, ...detail.kinds].filter(Boolean).join(' · ')}`;
     if (rule === 'android-class-names') {
-      return `- ${path} (${withSample(t.namedClassesIn(detail.namedClasses, detail.ownClasses), detail.sample)})`;
+      return `${path} (${withSample(t.namedClassesIn(detail.namedClasses, detail.ownClasses), detail.sample)})`;
     }
-    if (rule === 'hermes-bytecode') return `- ${path} (Hermes ${detail.version} · ${t.functionsIn(detail.functions)} · ${t.stringsIn(detail.strings)})`;
+    if (rule === 'hermes-bytecode') return `${path} (Hermes ${detail.version} · ${t.functionsIn(detail.functions)} · ${t.stringsIn(detail.strings)})`;
     if (rule === 'go-program') {
       const facts = [detail.goVersion, detail.modulePath, withSample(t.ownFilesIn(detail.ownFiles), detail.sample), t.dependencyFilesIn(detail.dependencyFiles)];
       if (detail.functions) facts.push(t.functionsIn(detail.functions));
-      return `- ${path} (${facts.filter(Boolean).join(' · ')})`;
+      return `${path} (${facts.filter(Boolean).join(' · ')})`;
     }
-    if (rule === 'dotnet-code') return `- ${path} (${t.typeCountIn(detail.types)} · ${t.methodsIn(detail.methods)})`;
+    if (rule === 'dotnet-code') return `${path} (${t.typeCountIn(detail.types)} · ${t.methodsIn(detail.methods)})`;
     if (rule === 'source-paths') {
-      return `- ${path} (${withSample(t.ownFilesIn(detail.ownFiles), detail.sample)} · ${t.dependencyFilesIn(detail.dependencyFiles)})`;
+      return `${path} (${withSample(t.ownFilesIn(detail.ownFiles), detail.sample)} · ${t.dependencyFilesIn(detail.dependencyFiles)})`;
     }
     if (rule === 'kept-names') {
       const facts = [
         withSample(t.typesIn(detail.architecture, detail.types), detail.sampleType),
         withSample(t.membersIn(detail.members), detail.sampleMember),
       ];
-      return `- ${path} (${facts.join(' · ')})`;
+      return `${path} (${facts.join(' · ')})`;
     }
-    if (detail.sampleSources?.length > 0) return `- ${path} (${t.originals(detail.sampleSources.join(', '))})`;
-    return `- ${path}`;
+    if (detail.sampleSources?.length > 0) return `${path} (${t.originals(detail.sampleSources.join(', '))})`;
+    return `${path}`;
   }
 
   /**
@@ -1125,7 +1142,6 @@ export function createReporter(language) {
   /** What was met and could not be read. It changes how everything after it reads, so it comes first. */
   function listUnread(result) {
     const unread = [];
-    const named = (paths) => capWith(paths, MAX_LISTED_PATHS, t.andMore).join(', ');
     if (result.unopenedContainers.length > 0) {
       unread.push(t.unopenedContainers(result.unopenedContainers.length, named(result.unopenedContainers)));
       if (result.unopenedContainers.some((name) => /\.dmg$/i.test(name))) unread.push(t.diskImageHint);
@@ -1140,8 +1156,13 @@ export function createReporter(language) {
     if (result.unreadableFiles.length > 0) {
       unread.push(t.unreadableFiles(result.unreadableFiles.length, named(result.unreadableFiles)));
     }
+    if (result.unreadableFolders.length > 0) {
+      unread.push(t.unreadableFolders(result.unreadableFolders.length, named(result.unreadableFolders)));
+    }
     if (result.skippedLargeFiles.length > 0) unread.push(t.skippedLarge(result.skippedLargeFiles.length));
+    if (result.keysOnlyFiles.length > 0) unread.push(t.keysOnlyFiles(result.keysOnlyFiles.length, named(result.keysOnlyFiles)));
     if (result.skippedOtherOrigins > 0) unread.push(t.skippedOtherOrigins(result.skippedOtherOrigins));
+    if (result.ignored.length > 0) unread.push(t.ignored(result.ignored.length, named(result.ignored)));
     // On disk, what is left after those was passed over for its kind.
     const passedOver = result.filesSeen - result.filesScanned - countLeftUnread(result);
     if (!result.isDeployed && passedOver > 0) unread.push(t.textless(passedOver));
@@ -1173,7 +1194,7 @@ export function createReporter(language) {
     const listed =
       rule === 'endpoint'
         ? capList(addresses.map((address) => `- ${address}`), MAX_LISTED_ADDRESSES)
-        : capList(findings.map(describeFinding), MAX_LISTED_PATHS);
+        : capList(findings.map((finding) => `- ${describeFinding(finding)}`), MAX_LISTED_PATHS);
     const lines = [
       `${tagOf(worstSeverity(findings))} ${t.rules[rule].title}`,
       ...indent(t.rules[rule].body(totals)),
@@ -1209,7 +1230,9 @@ export function createReporter(language) {
   function nextSteps(result) {
     const leftUnread =
       result.risk === 'unrated' ||
-      [result.unopenedContainers, result.nestedTooDeep, result.unreadScreenCode].some((paths) => paths.length > 0);
+      [result.unopenedContainers, result.nestedTooDeep, result.unreadScreenCode, result.unreadableFolders].some(
+        (paths) => paths.length > 0,
+      );
     const steps = leftUnread && !result.isDeployed ? [t.next.unread] : [];
     if (result.risk === 'unrated') return steps;
     const hasLeaks = hasLeakAtOrAbove(result.leaks, 'medium');
@@ -1264,6 +1287,8 @@ export function createReporter(language) {
     measureNotice: t.measureNotice,
     starting: t.starting,
     help: t.help.join('\n'),
+    sarifError: t.sarifError,
+    describeFinding,
 
     /** Text this reporter wrote, with color for a terminal that shows it. */
     paint(text) {
@@ -1314,8 +1339,10 @@ export function createReporter(language) {
     },
 
     fixDone(before, after, applied) {
+      const failed = applied.failed.map(({ path }) => toDisplayPath(before.root, path));
       return [
         t.fixDone(applied.movedCount),
+        ...(failed.length > 0 ? [t.fixFailed(failed.length, named(failed))] : []),
         riskOpening + t.riskLevels[before.risk] + RISK_ARROW + t.riskLevels[after.risk],
         `${t.leaksLabel}: ${describeLeaks(before.leaks)} → ${describeLeaks(after.leaks)}`,
         ...listUnread(after),

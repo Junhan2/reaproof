@@ -18,6 +18,12 @@ What changed in each release published to npm, newest first.
 - Opens tar archives, compressed with gzip or not (`.tar`, `.tgz`, `.tar.gz`), as `npm pack` writes a package and many Linux programs ship, and reads what is in them as if it lay on disk. 0.6.0 listed them as not opened. On fzf 0.74.5, ripgrep 15.2.0 and a package `npm pack` wrote, the findings are the same as for the folders they unpack into.
 - Reads WebAssembly modules for the names of their functions and their DWARF debug information, as it reads native programs, and, as for a program, for the paths of Rust's sources. The counts match wabt's `wasm-objdump` on 12 modules found on the test Mac: one kept 282 names, and 5 kept source paths, 3 of them under the home folder of the machine that built them.
 - Passes over the `packages` folder that sits beside Flutter's asset manifests, in an app and in a web build: it holds the files of the packages the app uses. A plugin's script there had rated LocalSend 1.18.2 moderate.
+- Prints the result as SARIF 2.1.0 with `--sarif`, for GitHub code scanning and other review tools, with the fields GitHub requires and a fingerprint that stays the same from one run to the next. The output passes the SARIF 2.1.0 schema of OASIS, and the README shows a workflow that uploads it.
+- Leaves out what `.reaproofignore` in the project folder lists, in patterns as `.gitignore` writes them, inside archives too, and names what it left out in the report and in the JSON (`ignored`). Given 20 paths and 11 pattern lines, it leaves out the same 17 paths as `git check-ignore`.
+- Names a folder it has no permission to open as not read, and reads the rest. 0.6.0 stopped with an error of its own (exit code 4) at the first such folder.
+- Leaves a map that `fix` cannot move where it is, names it, and moves the others. 0.6.0 stopped with an error of its own at the first such map.
+- Searches a code or text file over 30 MB for keys and `.env` values, and names it as searched for those alone. 0.6.0 skipped it.
+- Reads a deployed map between 30 MB and 256 MB a piece at a time for whether it holds source text, as it reads one on disk. 0.6.0 counted it as skipped.
 
 ## 0.6.0 (2026-10-16)
 

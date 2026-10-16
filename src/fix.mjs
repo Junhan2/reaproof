@@ -33,10 +33,12 @@ export function planFix(scanResult) {
 
 /**
  * Moves the map files out of the output into a backup kept outside the project, so the
- * backup can never be deployed along with the build.
+ * backup can never be deployed along with the build. A file that cannot be moved, because it
+ * is locked or not ours to move, is left where it is and said so; the others still move.
  *
  * @param {string} root absolute path the scan ran on
  * @param {string[]} mapPaths from `planFix`
+ * @returns {{ backupDir: string, movedCount: number, failed: { path: string, code: string }[] }}
  */
 export function applyFix(root, mapPaths) {
   const now = new Date();
@@ -53,8 +55,15 @@ export function applyFix(root, mapPaths) {
     join(backupDir, MANIFEST_NAME),
     JSON.stringify({ root, createdAt: now.toISOString(), files }, null, 2),
   );
-  for (const { original, stored } of files) moveFile(original, join(backupDir, stored));
-  return { backupDir, movedCount: files.length };
+  const failed = [];
+  for (const { original, stored } of files) {
+    try {
+      moveFile(original, join(backupDir, stored));
+    } catch (error) {
+      failed.push({ path: original, code: error.code ?? 'EUNKNOWN' });
+    }
+  }
+  return { backupDir, movedCount: files.length - failed.length, failed };
 }
 
 /**
@@ -104,6 +113,12 @@ function moveFile(from, to) {
     // The backup may sit on another volume than the project.
     if (error.code !== 'EXDEV') throw error;
     copyFileSync(from, to);
-    unlinkSync(from);
+    try {
+      unlinkSync(from);
+    } catch (unlinkError) {
+      // A file that cannot be taken away stays where it was, and the copy goes.
+      unlinkSync(to);
+      throw unlinkError;
+    }
   }
 }

@@ -5,6 +5,7 @@ import { applyFix, planFix, undoLastFix } from './fix.mjs';
 import { MeasureError, measureWithRea, REA_PACKAGE } from './measure.mjs';
 import { isWebAddress, scanDeployedSite } from './remote.mjs';
 import { createReporter, pickLanguage } from './report.mjs';
+import { toSarif } from './sarif.mjs';
 import { hasLeakAtOrAbove, LEAK_SEVERITIES } from './rules.mjs';
 import { resolveTargets, scan, ScanError, withoutFiles } from './scan.mjs';
 import { toPrintable, toVisibleJson } from './text.mjs';
@@ -12,6 +13,8 @@ import { toPrintable, toVisibleJson } from './text.mjs';
 const COMMANDS = { scan: runScan, fix: runFix, undo: runUndo, measure: runMeasure };
 const OPTIONS = {
   json: { type: 'boolean' },
+  // SARIF, the format GitHub code scanning and other review tools read, for a scan only.
+  sarif: { type: 'boolean' },
   yes: { type: 'boolean', short: 'y' },
   // The mildest leak that still stops a release.
   'fail-on': { type: 'string' },
@@ -62,7 +65,7 @@ export async function main(argv, outside) {
     // What can still be read of the command says how to answer it: in which language, and as JSON or not.
     const { values } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: false });
     const report = createReporter(pickLanguage(typeof values.lang === 'string' ? values.lang : undefined));
-    const wantsJson = values.json === true;
+    const wantsJson = wantsMachineOutput(values);
     const reason = report.usageError(error, findMisusedOption(values));
     // A person is shown how the command is used. An agent gets the reason alone.
     const message = wantsJson ? reason : `${reason}\n\n${report.help}`;
@@ -70,7 +73,7 @@ export async function main(argv, outside) {
   }
 
   const { values, positionals } = parsed;
-  const options = { ...values, failOn: values['fail-on'] ?? 'high' };
+  const options = { ...values, json: wantsMachineOutput(values), failOn: values['fail-on'] ?? 'high' };
   const report = createReporter(pickLanguage(options.lang));
   if (outside.color && !options.json) paint = report.paint;
   if (!LEAK_SEVERITIES.includes(options.failOn)) {
@@ -80,6 +83,9 @@ export async function main(argv, outside) {
   // `hasOwn`, not `in`: a folder named `toString` is a path, not a command.
   const command = Object.hasOwn(COMMANDS, positionals[0]) ? positionals.shift() : 'scan';
   const target = positionals[0] ?? '.';
+  if (values.sarif && (values.json || command !== 'scan')) {
+    return fail(terminal, report, true, EXIT_USAGE, { code: 'usage', message: report.sarifError });
+  }
   try {
     if (options.help) {
       terminal.print(report.help);
@@ -106,6 +112,11 @@ export async function main(argv, outside) {
     const failure = { code: 'internal', message: options.json ? message : `${message}\n${stack}`, stack };
     return fail(terminal, report, options.json, EXIT_INTERNAL, failure);
   }
+}
+
+/** Whoever asks for SARIF reads machines' output, and is answered as one asking for JSON is. */
+function wantsMachineOutput(values) {
+  return values.json === true || values.sarif === true;
 }
 
 /**
@@ -152,7 +163,8 @@ async function runScan(target, options, report, terminal) {
     ? await scanDeployedSite(target)
     : await scanOrOfferBuild(resolve(target), ask, report, terminal);
   const ending = endingOf(result, options);
-  terminal.print(options.json ? toJson(withExplanation(result, report, ending), report) : report.scan(result));
+  if (options.sarif) terminal.print(toVisibleJson(toSarif(result, report, readPackageVersion())));
+  else terminal.print(options.json ? toJson(withExplanation(result, report, ending), report) : report.scan(result));
 
   // A deployed result plans nothing: none of its findings is a file on disk.
   const mapPaths = planFix(result);
@@ -211,7 +223,8 @@ async function runFix(target, options, report, terminal) {
 function takeOutMaps(before, mapPaths, options, report, terminal) {
   const applied = applyFix(before.root, mapPaths);
   // The moved files are the only change, so the rest of the output is not read again.
-  const after = withoutFiles(before, mapPaths);
+  const notMoved = new Set(applied.failed.map(({ path }) => path));
+  const after = withoutFiles(before, mapPaths.filter((path) => !notMoved.has(path)));
   // The check has been made already, so an output with nothing left in it is not a failure.
   const exitCode = hasLeakAtOrAbove(after.leaks, options.failOn) ? EXIT_FINDINGS : EXIT_OK;
   const ending = { failOn: options.failOn, exitCode };

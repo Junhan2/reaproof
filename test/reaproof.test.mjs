@@ -33,6 +33,8 @@ const MAP_WITH_SOURCES = JSON.stringify({
 });
 const BUNDLE = 'const r=.1;\n//# sourceMappingURL=app.js.map\n';
 const BUILT_PROJECT = { 'package.json': '{}', 'dist/app.js': BUNDLE, 'dist/app.js.map': MAP_WITH_SOURCES };
+// Windows keeps no such permission, and nothing is closed to the superuser.
+const canBeDenied = process.platform !== 'win32' && process.getuid() !== 0;
 
 function makeTempDir(t) {
   const directory = mkdtempSync(join(tmpdir(), 'reaproof-test-'));
@@ -975,6 +977,29 @@ test('fix pointed at a single map file moves it and finishes cleanly', (t) => {
   assert.equal(existsSync(mapPath), false);
 });
 
+test('a map that cannot be moved is left where it is and said so, and the others still move', { skip: !canBeDenied }, (t) => {
+  const root = makeProject(t, {
+    ...BUILT_PROJECT,
+    'dist/locked/vendor.js': BUNDLE.replace('app.js.map', 'vendor.js.map'),
+    'dist/locked/vendor.js.map': MAP_WITH_SOURCES,
+  });
+  const locked = join(root, 'dist/locked');
+  chmodSync(locked, 0o555);
+  let answer;
+  try {
+    answer = runCli(['fix', root, '--yes', '--lang', 'en'], { REAPROOF_HOME: makeTempDir(t) });
+  } finally {
+    chmodSync(locked, 0o755);
+  }
+
+  assert.equal(existsSync(join(root, 'dist/app.js.map')), false);
+  assert.equal(existsSync(join(locked, 'vendor.js.map')), true);
+  assert.match(answer.stdout, /^Done: 1 taken out\.\nMap files that could not be moved: 1 \(dist\/locked\/vendor\.js\.map\)\. /);
+  // What is left still gives the source away, and the command ends as it would for that.
+  assert.match(answer.stdout, /rea risk: very high → very high/);
+  assert.equal(answer.status, 1);
+});
+
 test('a result without leaks is rated baseline, never safe', (t) => {
   const root = makeProject(t, { 'package.json': '{}', 'dist/app.js': 'const r=.1;\n' });
 
@@ -1236,18 +1261,29 @@ test('the command checks an address and refuses to fix one', async (t) => {
   assert.deepEqual(site.requested, ['/', '/app.js', '/app.js.map']);
 });
 
-test('a deployed map too large to read is counted as skipped without being downloaded', async (t) => {
+test('a deployed map larger than a code file is read a stretch at a time, and one past the limit is skipped without being downloaded', async (t) => {
+  const largeMap = JSON.stringify({
+    version: 3,
+    sources: ['src/app.ts'],
+    sourcesContent: [`export const total = 1;\n${' '.repeat(31 * 1024 * 1024)}`],
+    mappings: '',
+  });
   const site = await startSite(t, {
-    '/': '<script src="/app.js"></script>',
+    '/': '<script src="/app.js"></script><script src="/huge.js"></script>',
     '/app.js': BUNDLE,
+    '/app.js.map': largeMap,
+    '/huge.js': 'const r=.1;\n//# sourceMappingURL=huge.js.map\n',
     // States its size and never sends it: reading on would wait for bytes that do not come.
-    '/app.js.map': (response) => response.writeHead(200, { 'content-length': 31 * 1024 * 1024 }).flushHeaders(),
+    '/huge.js.map': (response) => response.writeHead(200, { 'content-length': 257 * 1024 * 1024 }).flushHeaders(),
   });
 
   const result = await scanDeployedSite(site.address);
 
-  assert.deepEqual(result.skippedLargeFiles, ['/app.js.map']);
-  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.skippedLargeFiles, ['/huge.js.map']);
+  assert.deepEqual(
+    result.findings.map(({ rule, severity, path, detail }) => [rule, severity, path, detail.sourceCount]),
+    [['sourcemap-sources', 'critical', '/app.js.map', null]],
+  );
 });
 
 test('what a deployed site serves cannot send the check elsewhere or after more than its own maps', async (t) => {
@@ -2316,8 +2352,6 @@ test('what an archive holds but will not give up is named, and without it there 
     'denied/settings.bin': 'not for this user',
   });
   chmodSync(join(root, 'denied/settings.bin'), 0o000);
-  // Windows keeps no such permission, and nothing is closed to the superuser.
-  const canBeDenied = process.platform !== 'win32' && process.getuid() !== 0;
   const unread = (folder) => {
     const { risk, unreadableFiles, unreadableArchives } = scan(join(root, folder));
     return [risk, unreadableFiles, unreadableArchives];
@@ -2349,6 +2383,39 @@ test('what an archive holds but will not give up is named, and without it there 
   // It is not counted a second time among the files passed over for their kind.
   assert.doesNotMatch(locked.stdout, /Not read: /);
   assert.match(cut.stdout, /Files read: 1 \(of 2 met\)\n  Archives that could not be read: 1 \(app\.zip\)/);
+});
+
+test('a folder that cannot be opened is named as not read, and what is beside it is still read', { skip: !canBeDenied }, (t) => {
+  const root = makeProject(t, {
+    ...BUILT_PROJECT,
+    'dist/locked/notes.txt': 'hello\n',
+    'quiet/package.json': '{}',
+    'quiet/dist/notes.txt': 'hello\n',
+    'quiet/dist/locked/app.js': 'const r = 0.1;\n',
+  });
+  const lockedFolders = [join(root, 'dist/locked'), join(root, 'quiet/dist/locked')];
+  for (const folder of lockedFolders) chmodSync(folder, 0o000);
+  let result;
+  let quiet;
+  let beside;
+  let alone;
+  try {
+    result = scan(root);
+    quiet = scan(join(root, 'quiet'));
+    beside = runCli([root, '--lang', 'en']);
+    alone = runCli([lockedFolders[0], '--lang', 'en']);
+  } finally {
+    for (const folder of lockedFolders) chmodSync(folder, 0o755);
+  }
+
+  assert.deepEqual([result.unreadableFolders, result.risk], [['dist/locked'], 'very-high']);
+  // Where no code was read beside it, the code may well be in there.
+  assert.deepEqual([quiet.unreadableFolders, quiet.risk], [['dist/locked'], 'unrated']);
+  assert.match(beside.stdout, /Folders that could not be opened: 1 \(dist\/locked\)\. There was no permission to look inside\./);
+  assert.match(beside.stdout, /What to do next:\n  1\. Check what was not read/);
+  // With only that folder pointed at, nothing was read, which is not a fault of the tool.
+  assert.equal(alone.status, 3);
+  assert.match(alone.stdout, /rea risk: not rated/);
 });
 
 test('an archive that states far more than it weighs is read up to a limit, smallest files first', (t) => {
@@ -2926,6 +2993,35 @@ test('a source map too large to read whole is still judged by whether it carries
   );
 });
 
+test('a code file too large to read whole is still searched for keys and .env values, and said to be', (t) => {
+  const key = ['sk', 'live', 'Zk9aB3xY7Qw8eR5tY2Mn0010'].join('_');
+  const token = `tok${'Zk9aB3xY7'.repeat(4)}`;
+  const large = `${' '.repeat(MAX_FILE_BYTES)}\n`;
+  const root = makeProject(t, {
+    'package.json': '{}',
+    '.env': `PAYMENT_API_TOKEN=${token}\n`,
+    'dist/vendor.js': `const stripe = "${key}";\n${large}const token = "${token}";\n`,
+    // A React Native bundle is JavaScript by another name, unless it is Hermes bytecode.
+    'only/package.json': '{}',
+    'only/dist/main.jsbundle': `const r = 0.1;\n${large}`,
+  });
+
+  const result = scan(root);
+
+  assert.deepEqual(
+    result.findings.map(({ rule, path }) => [rule, path]).sort(),
+    [['env-value', 'dist/vendor.js'], ['secret', 'dist/vendor.js']],
+  );
+  assert.deepEqual([result.keysOnlyFiles, result.skippedLargeFiles], [['dist/vendor.js'], []]);
+  assert.match(
+    runCli([root, '--lang', 'en']).stdout,
+    /Files over 30 MB, searched for keys and \.env values only: 1 \(dist\/vendor\.js\)\. The other checks/,
+  );
+  // Where nothing was found in such a file, what the other checks would have found is not known.
+  const only = scan(join(root, 'only'));
+  assert.deepEqual([only.keysOnlyFiles, only.risk], [['dist/main.jsbundle'], 'unrated']);
+});
+
 test('a Linux or Android program that kept its names or debug information is reported, and a stripped one is not', (t) => {
   const named = (count, options = {}) => Array.from({ length: count }, (_, index) => ({ name: `price_rule_${index}`, ...options }));
   const root = makeProject(t, {
@@ -3255,4 +3351,126 @@ test('a program built by the real Go tools is noted with what go version -m says
   assert.ok(notes.default.functions > 100, String(notes.default.functions));
   // Only the build that was not stripped keeps a symbol table, whatever format the system uses.
   assert.deepEqual(findings.filter(({ rule }) => rule === 'native-symbols').map(({ path }) => plain(path)), ['default']);
+});
+
+test('an ignore list costs little in an archive that nests folders tens of thousands deep', { timeout: 10_000 }, (t) => {
+  const chains = Object.fromEntries(Array.from({ length: 4 }, (_, index) => [`c${index}/${'a/'.repeat(30_000)}x.js`, 'const r = 0.1;\n']));
+  const root = makeProject(t, {
+    'package.json': '{}',
+    '.reaproofignore': 'fixtures/\n*.tmp\n/dist/**/x.js\n',
+    'dist/app.zip': buildZip(chains),
+  });
+
+  const result = scan(root);
+
+  // A path that long is matched by name alone, so the pattern with a `/` in it does not reach it.
+  assert.deepEqual([result.ignored, result.unreadableArchives, result.scriptsScanned], [[], [], 4]);
+});
+
+test('with --sarif the result is SARIF that code scanning reads, and the command ends as it does without', async (t) => {
+  const key = ['sk', 'live', 'Zk9aB3xY7Qw8eR5tY2Mn0011'].join('_');
+  const otherKey = ['sk', 'live', 'Qw8eR5tY2Mn0Zk9aB3xY7022'].join('_');
+  const root = makeProject(t, {
+    ...BUILT_PROJECT,
+    'dist/pay.js': `const stripe = "${key}";\nconst refunds = "${otherKey}";`,
+    'dist/app.zip': buildZip({ 'inner.js.map': MAP_WITH_SOURCES }),
+  });
+  const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+  const { status, stdout } = runCli([root, '--sarif', '--lang', 'en']);
+
+  const sarif = JSON.parse(stdout);
+  const [run] = sarif.runs;
+  assert.equal(status, 1);
+  assert.equal(sarif.version, '2.1.0');
+  assert.deepEqual([run.tool.driver.name, run.tool.driver.version], ['Reaproof', version]);
+  // What GitHub requires of each rule and of each result.
+  for (const rule of run.tool.driver.rules) {
+    assert.ok(rule.shortDescription.text && rule.fullDescription.text && rule.help.text, rule.id);
+  }
+  const ruleNamed = Object.fromEntries(run.tool.driver.rules.map((rule) => [rule.id, rule]));
+  assert.equal(ruleNamed['sourcemap-sources'].properties['security-severity'], '9.5');
+  // A file inside an archive is placed on the archive, which is what sits in the repository.
+  assert.deepEqual(
+    run.results.map(({ ruleId, level, locations: [{ physicalLocation }] }) => [ruleId, level, physicalLocation.artifactLocation.uri]).sort(),
+    [
+      ['secret', 'error', 'dist/pay.js'],
+      ['secret', 'error', 'dist/pay.js'],
+      ['sourcemap-sources', 'error', 'dist/app.js.map'],
+      ['sourcemap-sources', 'error', 'dist/app.zip'],
+    ],
+  );
+  // Two keys of one kind in one file are two results, each with a fingerprint of its own.
+  const fingerprints = run.results.map(({ partialFingerprints }) => partialFingerprints.primaryLocationLineHash);
+  assert.ok(fingerprints.every((fingerprint) => /^[0-9a-f]{16}:1$/.test(fingerprint)));
+  assert.equal(new Set(fingerprints).size, fingerprints.length);
+  assert.equal(stdout.includes(key), false);
+
+  // A file on disk is placed by its own path, also in a folder whose name could be read as an archive's.
+  if (process.platform !== 'win32') {
+    const colon = makeProject(t, { 'package.json': '{}', 'dist/v1:/pay.js': `const stripe = "${key}";` });
+    const [placed] = JSON.parse(runCli([colon, '--sarif']).stdout).runs[0].results;
+    assert.equal(placed.locations[0].physicalLocation.artifactLocation.uri, 'dist/v1%3A/pay.js');
+  }
+
+  // A deployed site's files are placed at their addresses.
+  const site = await startSite(t, { '/': '<script src="/app.js"></script>', '/app.js': BUNDLE, '/app.js.map': MAP_WITH_SOURCES });
+  const terminal = makeTerminal();
+  assert.equal(await main([site.address, '--sarif'], terminal), 1);
+  const [deployed] = JSON.parse(terminal.printed.join('\n')).runs[0].results;
+  assert.equal(deployed.locations[0].physicalLocation.artifactLocation.uri, new URL('/app.js.map', site.address).href);
+
+  for (const misuse of [[root, '--sarif', '--json'], ['fix', root, '--sarif']]) {
+    const answer = runCli([...misuse, '--lang', 'en']);
+    assert.equal(answer.status, 2);
+    assert.match(JSON.parse(answer.stdout).error.message, /--sarif works with a scan only/);
+  }
+  // A command that cannot be read at all is answered for a machine too.
+  const unreadable = runCli([root, '--sarif', '--fial-on', 'high', '--lang', 'en']);
+  assert.deepEqual([unreadable.status, JSON.parse(unreadable.stdout).error.message], [2, 'Unknown option: --fial-on']);
+});
+
+test('what .reaproofignore lists is not read and is named in the report, also when the build is pointed at', (t) => {
+  const key = ['sk', 'live', 'Zk9aB3xY7Qw8eR5tY2Mn0012'].join('_');
+  const keyFile = `const stripe = "${key}";`;
+  const root = makeProject(t, {
+    ...BUILT_PROJECT,
+    // A line that starts with `!` is not read: what a pattern leaves out stays out.
+    '.reaproofignore': '# known and accepted\nfixtures/\n*.map\n!dist/app.js.map\n/dist/docs/**/example.js\ndist/app.zip/samples/\n',
+    'dist/fixtures/test.js': keyFile,
+    // A pattern that ends with `/` is for folders only, and one with a `/` before its end counts from the project.
+    'dist/notes/fixtures': keyFile,
+    'dist/docs/example.js': keyFile,
+    'dist/docs/a/b/example.js': keyFile,
+    'dist/copy/dist/docs/example.js': keyFile,
+    'dist/app.zip': buildZip({
+      'samples/inner.js': keyFile,
+      'main.js': 'const r = 0.1;\n',
+      // A path is matched as it is, however long, and not as the report shortens it.
+      [`${'deep/'.repeat(70)}vendor.js.map`]: MAP_WITH_SOURCES,
+    }),
+  });
+
+  const fromProject = scan(root);
+  const fromBuild = scan(join(root, 'dist'));
+  const fromArchive = scan(join(root, 'dist/app.zip'));
+
+  // The long one is named as the report shortens it, and is the sixth.
+  const named = (paths) => paths.filter((path) => !path.includes('deep/')).sort();
+  assert.deepEqual(
+    [named(fromProject.ignored), fromProject.ignored.length],
+    [['dist/app.js.map', 'dist/app.zip:/samples', 'dist/docs/a/b/example.js', 'dist/docs/example.js', 'dist/fixtures'], 6],
+  );
+  assert.deepEqual(
+    fromProject.findings.map(({ rule, path }) => [rule, path]).sort(),
+    [['secret', 'dist/copy/dist/docs/example.js'], ['secret', 'dist/notes/fixtures']],
+  );
+  assert.deepEqual(
+    [named(fromBuild.ignored), fromBuild.ignored.length],
+    [named(fromProject.ignored).map((path) => path.slice('dist/'.length)), 6],
+  );
+  // Pointed at the archive itself, what is in it is matched by the same paths.
+  assert.deepEqual([named(fromArchive.ignored), fromArchive.ignored.length], [['app.zip:/samples'], 2]);
+  assert.deepEqual(fromArchive.findings.filter(({ rule }) => rule === 'secret' || rule.startsWith('sourcemap')), []);
+  assert.match(runCli([root, '--lang', 'en']).stdout, /Not read, as \.reaproofignore says: 6 \(/);
 });
