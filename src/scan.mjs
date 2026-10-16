@@ -11,6 +11,7 @@ import { checkElectronFuses } from './electron.mjs';
 import { checkElf, readElf } from './elf.mjs';
 import { checkEnvValues, readEnvSecrets } from './env.mjs';
 import { checkGo, collectGo, startGo } from './go.mjs';
+import { readIgnoreFile } from './ignore.mjs';
 import { readMachO } from './macho.mjs';
 import { checkMachO } from './macos.mjs';
 import { checkPe, readPe } from './pe.mjs';
@@ -19,7 +20,7 @@ import { archiveFinding, checkFile, checkPath, hasContentChecks, isScript, isSou
 import { checkRustSourcePaths, collectRustSourcePaths, startRustSourcePaths } from './rust.mjs';
 import { isTarName, openTar } from './tar.mjs';
 import { holdsTauriScreenCode } from './tauri.mjs';
-import { toShown, toShownText } from './text.mjs';
+import { INSIDE_ARCHIVE, toShown, toShownText } from './text.mjs';
 import { checkWasm } from './wasm.mjs';
 import { isZip, openZip } from './zip.mjs';
 
@@ -51,6 +52,8 @@ export const CHUNK_BYTES = 896 * 1024;
 // Each chunk runs this far into the next, so a key across the join is whole in one of them,
 // with what stands around it.
 export const OVERLAP_BYTES = 64 * 1024;
+// What a folder answers when it is not ours to list.
+const UNLISTABLE = new Set(['EACCES', 'EPERM']);
 // Where JavaScript and Python keep the libraries a program is built on.
 const DEPENDENCY_FOLDERS = new Set(['node_modules', 'site-packages', 'dist-packages']);
 // Flutter keeps the files of the packages an app uses in `packages`, beside the manifests it
@@ -117,7 +120,9 @@ export function resolveTargets(root) {
     if (outputDirs.length === 0) throw new ScanError('no-build-output', root, { buildCommand: findBuildCommand(root) });
     return { targets: outputDirs, targetsPickedByName: true };
   }
-  const projectFile = readdirSync(root).find((name) => NATIVE_PROJECT_FILE.test(name));
+  // A folder closed to this user is checked as it is, and named there as not read.
+  const names = unlessUnlistable(() => readdirSync(root)) ?? [];
+  const projectFile = names.find((name) => NATIVE_PROJECT_FILE.test(name));
   if (projectFile) throw new ScanError('artifact-needed', root, { projectFile });
   return { targets: [root], targetsPickedByName: false };
 }
@@ -160,6 +165,9 @@ export function startResult(subject) {
     unopenedContainers: [],
     nestedTooDeep: [],
     unreadScreenCode: [],
+    unreadableFolders: [],
+    keysOnlyFiles: [],
+    ignored: [],
   };
 }
 
@@ -183,7 +191,10 @@ export function countLeftUnread(result) {
  */
 export function finishResult(result) {
   const readCode = result.programsScanned + result.scriptsScanned > 0;
-  const wasRead = result.filesScanned > result.archivesOpened && (readCode || countLeftUnread(result) === 0);
+  // A folder that could not be opened may hold anything, and a file searched for keys alone
+  // may hold more than keys, such as a map appended to the code. Both count as left unread.
+  const leftUnread = countLeftUnread(result) + result.unreadableFolders.length + result.keysOnlyFiles.length;
+  const wasRead = result.filesScanned > result.archivesOpened && (readCode || leftUnread === 0);
   return Object.assign(result, summarizeFindings(result.findings, wasRead));
 }
 
@@ -203,15 +214,32 @@ export function scan(inputPath) {
     ...secret,
     envFile: toDisplayPath(root, join(project, secret.envFile)),
   }));
-  const state = { result, envSecrets };
+  // What the project says to leave out is matched against each path as it is from the project
+  // folder, as `.gitignore` is, and not as it is shown.
+  const ignores = readIgnoreFile(project);
+  const fromProject = (path) => relative(project, path).split(sep).join('/');
+  const state = { result, envSecrets, ignores };
+  const listOnDisk = (folder) => {
+    const listed = unlessUnlistable(() => listDisk(folder));
+    if (!listed) {
+      result.unreadableFolders.push(toDisplayPath(root, folder.path));
+      return [];
+    }
+    if (!ignores) return listed;
+    // Each keeps the path it is matched by, for what an archive among them holds.
+    return listed
+      .map((child) => ({ ...child, matchedAs: fromProject(child.path) }))
+      .filter((child) => !isIgnored(state, child.matchedAs, child, () => toDisplayPath(root, child.path)));
+  };
 
   for (const target of result.targets) {
     // What was pointed at is an entry like any other, so it gets the checks its kind gets.
     const pointedAt = { path: target, name: basename(target), isDirectory: statSync(target).isDirectory() };
-    for (const { path, name, isDirectory } of walk(pointedAt, listDisk)) {
+    if (ignores) pointedAt.matchedAs = fromProject(target);
+    for (const { path, name, isDirectory, matchedAs = null } of walk(pointedAt, listOnDisk)) {
       const displayPath = toDisplayPath(root, path);
       if (isDirectory) addFindings(state, checkStrayDirectory({ path: displayPath, name }), path);
-      else scanFile({ displayPath, name, diskPath: path, open: (use) => openOnDisk(path, use) }, state);
+      else scanFile({ displayPath, name, diskPath: path, matchedAs, open: (use) => openOnDisk(path, use) }, state);
     }
   }
   return finishResult(result);
@@ -274,6 +302,8 @@ export function withoutFiles(scanResult, removedPaths) {
  *
  * @param {object} file
  * @param {string | null} file.diskPath null for a file inside an archive
+ * @param {string | null} file.matchedAs its path from the project folder, written with `/`, an
+ *   archive counting as a folder: what the project's ignore list is matched against, when it has one
  * @param {(use: (source: import('./bytes.mjs').ByteSource) => void) => boolean} file.open
  *   hands the file's bytes to `use`; false when the file cannot be opened at all
  * @param {{ depth: number, budget: { left: number }, isAsar: boolean, dexClasses?: object } | null} [file.within]
@@ -281,7 +311,7 @@ export function withoutFiles(scanResult, removedPaths) {
  *   outermost, whether the one right around the file is an ASAR, and, in an Android app
  *   package, where the classes of the app's own code are counted
  */
-function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
+function scanFile({ displayPath, name, diskPath, matchedAs, open, within = null }, state) {
   const { result } = state;
   const extension = extname(name).toLowerCase();
   result.filesSeen += 1;
@@ -291,13 +321,15 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
 
   const isText = hasContentChecks(extension);
   const wasOpened = open((source) => {
-    // A map too large to read whole can still carry all of the original source. It is read
-    // a stretch at a time for what a smaller one is read for.
-    const isLargeMap = isSourceMap(extension) && source.byteLength > MAX_FILE_BYTES;
-    const isReadWhole = isText && !isLargeMap;
+    // Text too large to read whole is read a stretch at a time: a map for what a smaller one is
+    // read for, since it can still carry all of the original source, and anything else for keys
+    // and `.env` values alone, as a program is, and said to be.
+    const isLarge = source.byteLength > MAX_FILE_BYTES;
+    const isReadWhole = isText && !isLarge;
+    const isLargeMap = isSourceMap(extension) && isLarge;
     // A file inside an archive is held whole in memory once read, and counts against what
     // may still be read out of that archive.
-    const mostBytesOfOne = isReadWhole ? MAX_FILE_BYTES : within ? MAX_HELD_BYTES : Infinity;
+    const mostBytesOfOne = within ? MAX_HELD_BYTES : Infinity;
     if (source.byteLength > Math.min(mostBytesOfOne, within?.budget.left ?? Infinity)) {
       result.skippedLargeFiles.push(displayPath);
       return;
@@ -320,19 +352,21 @@ function scanFile({ displayPath, name, diskPath, open, within = null }, state) {
       const depth = (within?.depth ?? 0) + 1;
       const budget = within?.budget ?? { left: MAX_UNPACKED_BYTES };
       if (depth > MAX_ARCHIVE_DEPTH) result.nestedTooDeep.push(displayPath);
-      else scanArchive(openArchive, source, displayPath, { depth, budget, isAsar: openArchive === openAsar }, state);
+      else scanArchive(openArchive, source, displayPath, { depth, budget, isAsar: openArchive === openAsar, matchedAs }, state);
     } else if (isSealedContainer(name)) {
       result.unopenedContainers.push(displayPath);
     } else if (source.byteLength > MAX_SEARCHED_BYTES) {
       result.skippedLargeFiles.push(displayPath);
     } else {
       result.filesScanned += 1;
-      const isScriptBundle =
-        SCRIPT_BUNDLE.test(name) && source.byteLength <= MAX_FILE_BYTES && !readStart(source.byteLength).includes(0);
-      if (isReadWhole || isScriptBundle) scanText({ displayPath, extension: isScriptBundle ? '.js' : extension, diskPath, source }, state);
-      else if (isLargeMap) scanLargeMap({ displayPath, diskPath, source }, state);
+      const isScriptBundle = SCRIPT_BUNDLE.test(name) && !holdsZeroByte(source);
+      if (isReadWhole || (isScriptBundle && !isLarge)) {
+        scanText({ displayPath, extension: isScriptBundle ? '.js' : extension, diskPath, source }, state);
+      } else if (isLargeMap) addFindings(state, scanLargeMap(displayPath, source, state.envSecrets), diskPath);
       else {
         scanBytes({ displayPath, diskPath, source, opening }, state);
+        // Text that comes this way was too large to read whole.
+        if (isText || isScriptBundle) result.keysOnlyFiles.push(displayPath);
         // The classes of an Android app's own code are counted as each of its DEX files goes by.
         if (within?.dexClasses) collectDexClasses(name, source, within.dexClasses);
       }
@@ -358,7 +392,7 @@ function openOnDisk(file, use) {
 
 /**
  * @param {typeof openZip | typeof openAsar | typeof openTar} openArchive
- * @param {{ depth: number, budget: { left: number }, isAsar: boolean }} within what the files of this archive sit in
+ * @param {{ depth: number, budget: { left: number }, isAsar: boolean, matchedAs: string | null }} within what the files of this archive sit in
  */
 function scanArchive(openArchive, source, displayPath, within, state) {
   let archive;
@@ -383,9 +417,14 @@ function scanArchive(openArchive, source, displayPath, within, state) {
 
   // A path is worked out only where something is said about it. An archive can put one
   // file under tens of thousands of folders, each with a path longer than the last.
-  const shownPath = (inner) => toShownText(`${displayPath}:/${inner.path}`);
+  const shownPath = (inner) => toShownText(`${displayPath}${INSIDE_ARCHIVE}${inner.path}`);
+  const matchedAs = (inner) => `${within.matchedAs}/${inner.path}`;
   const files = [];
-  for (const inner of walk(archive.root, archive.list)) {
+  const listInside = state.ignores
+    ? (directory) =>
+        archive.list(directory).filter((inner) => !isIgnored(state, matchedAs(inner), inner, () => shownPath(inner)))
+    : archive.list;
+  for (const inner of walk(archive.root, listInside)) {
     if (!inner.isDirectory) files.push(inner);
     else if (strayDirectoryKind(inner.name) !== null) {
       addFindings(state, checkStrayDirectory({ path: shownPath(inner), name: inner.name }), null);
@@ -399,7 +438,8 @@ function scanArchive(openArchive, source, displayPath, within, state) {
       use(lazyBytes(inner.size, () => archive.read(inner)));
       return true;
     };
-    scanFile({ displayPath: shownPath(inner), name: inner.name, diskPath: null, open, within: inside }, state);
+    const innerMatchedAs = state.ignores ? matchedAs(inner) : null;
+    scanFile({ displayPath: shownPath(inner), name: inner.name, diskPath: null, matchedAs: innerMatchedAs, open, within: inside }, state);
   }
   if (dexClasses) addFindings(state, checkDexClasses(displayPath, dexClasses), null);
 }
@@ -416,21 +456,21 @@ function scanText({ displayPath, extension, diskPath, source }, state) {
  * original source and for values from `.env`. Keys are not looked for by their shape, as in
  * any map: a map carries the sources of dependencies too, and the example keys in their docs.
  */
-function scanLargeMap({ displayPath, diskPath, source }, state) {
+export function scanLargeMap(displayPath, source, envSecrets) {
   const map = startLargeMap();
   const envFindings = new Map();
-  const hasEnvValues = state.envSecrets.length > 0;
+  const hasEnvValues = envSecrets.length > 0;
   for (const chunk of readChunks(source, CHUNK_BYTES, OVERLAP_BYTES)) {
     collectLargeMap(source, chunk, OVERLAP_BYTES, map);
     // With no `.env` value to look for, the rest can tell nothing more once the source shows.
     if (!hasEnvValues && map.carriesSource) break;
     if (!hasEnvValues) continue;
     // The same value where two chunks overlap is one finding.
-    for (const finding of checkEnvValues(displayPath, chunk.bytes.toString('latin1'), state.envSecrets)) {
+    for (const finding of checkEnvValues(displayPath, chunk.bytes.toString('latin1'), envSecrets)) {
       envFindings.set(JSON.stringify(finding), finding);
     }
   }
-  addFindings(state, [...checkLargeMap(displayPath, map), ...envFindings.values()], diskPath);
+  return [...checkLargeMap(displayPath, map), ...envFindings.values()];
 }
 
 /**
@@ -567,6 +607,26 @@ function* walk(entry, list) {
     const children = listed.filter((child) => !(child.isDirectory && isDependency(child)));
     // The last one in is the next one out, so they go in backwards to come out as listed.
     for (let index = children.length - 1; index >= 0; index -= 1) toVisit.push(children[index]);
+  }
+}
+
+/**
+ * Whether the project's ignore list leaves a file or folder out; one it does is named in the
+ * result as it is shown, which is worked out only then.
+ */
+function isIgnored(state, matchedAs, { name, isDirectory }, toShownPath) {
+  if (!state.ignores(matchedAs, name, isDirectory)) return false;
+  state.result.ignored.push(toShownPath());
+  return true;
+}
+
+/** What `list` returns, or null for a folder that is not ours to list. */
+function unlessUnlistable(list) {
+  try {
+    return list();
+  } catch (error) {
+    if (!UNLISTABLE.has(error.code)) throw error;
+    return null;
   }
 }
 

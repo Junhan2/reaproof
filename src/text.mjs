@@ -6,6 +6,8 @@ const UNSEEN = '\\p{Cc}\\p{Cf}\\p{Co}\\p{Cs}\\p{Zl}\\p{Zp}\\p{Default_Ignorable_
 const UNSEEN_CHARACTERS = new RegExp(`[${UNSEEN}]`, 'gu');
 const UNSEEN_EXCEPT_LINE_BREAKS = new RegExp(`(?!\\n)[${UNSEEN}]`, 'gu');
 const MAX_SHOWN_CHARACTERS = 300;
+// A file inside an archive is shown as the archive's path, this, then its path inside.
+export const INSIDE_ARCHIVE = ':/';
 
 /**
  * Text copied out of a scanned file, made safe to show. File names and strings in a build

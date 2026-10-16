@@ -1,10 +1,18 @@
 import { extname } from 'node:path';
+import { lazyBytes } from './bytes.mjs';
 import { checkInlineMaps, checkMapFile, findMapReferences } from './checks/sourcemaps.mjs';
 import { isScript } from './rules.mjs';
-import { finishResult, MAX_FILE_BYTES, ScanError, startResult } from './scan.mjs';
+import { finishResult, MAX_FILE_BYTES, ScanError, scanLargeMap, startResult } from './scan.mjs';
 import { toShown, toShownText } from './text.mjs';
 
 const REQUEST_TIMEOUT_MS = 15_000;
+// A map can be far larger than the code it maps. One up to this size is downloaded, given the
+// time that takes, and one larger than a code file is read a stretch at a time, as a large map
+// on disk is.
+const MAX_MAP_BYTES = 256 * 1024 * 1024;
+const MAP_TIMEOUT_MS = 120_000;
+const CODE_LIMITS = { mostBytes: MAX_FILE_BYTES, timeoutMs: REQUEST_TIMEOUT_MS };
+const MAP_LIMITS = { mostBytes: MAX_MAP_BYTES, timeoutMs: MAP_TIMEOUT_MS };
 // One page and its own files, read one after another: a check, not a crawl.
 const MAX_ASSETS = 60;
 const MAX_REDIRECTS = 5;
@@ -47,9 +55,9 @@ export async function scanDeployedSite(pageAddress) {
   });
   // A file that is not there, or does not answer, is no finding. One too large to read is
   // put on the same list the local scan puts one on.
-  const read = async (address) => {
+  const read = async (address, limits) => {
     try {
-      return await fetchText(address, page.origin);
+      return await fetchFile(address, page.origin, limits);
     } catch (error) {
       if (error.message === TOO_LARGE) result.skippedLargeFiles.push(address.pathname);
       return null;
@@ -64,7 +72,7 @@ export async function scanDeployedSite(pageAddress) {
 
   const checkedMaps = new Set();
   for (const asset of ownAssets.slice(0, MAX_ASSETS)) {
-    const code = await read(asset);
+    const code = await read(asset, CODE_LIMITS);
     if (!code) continue;
     result.filesScanned += 1;
     if (isScript(extname(asset.pathname).toLowerCase())) result.scriptsScanned += 1;
@@ -73,9 +81,9 @@ export async function scanDeployedSite(pageAddress) {
     for (const mapAddress of listMapCandidates(code)) {
       if (mapAddress.origin !== page.origin || checkedMaps.has(mapAddress.href)) continue;
       checkedMaps.add(mapAddress.href);
-      const map = await read(mapAddress);
+      const map = await read(mapAddress, MAP_LIMITS);
       // A single-page app answers unknown paths with its HTML; that does not parse as a map.
-      if (map) addFindings(checkMapFile(mapAddress.pathname, map.text));
+      if (map) addFindings(checkMap(mapAddress.pathname, map.bytes));
     }
   }
   return finishResult(result);
@@ -87,7 +95,7 @@ async function fetchPage(pageAddress) {
   const requested = toAddress(pageAddress);
   if (!requested) throw unreachable('INVALID_ADDRESS');
   try {
-    return await fetchText(requested, null);
+    return await fetchFile(requested, null, CODE_LIMITS);
   } catch (error) {
     if (error.name === 'TimeoutError' || error.name === 'AbortError') throw unreachable('TIMEOUT');
     // Node wraps a network error in "fetch failed" and keeps underneath the system's code
@@ -138,23 +146,41 @@ function toAddress(reference, base) {
   }
 }
 
+/** A map's findings, read whole when it is no larger than a code file and a stretch at a time when it is. */
+function checkMap(path, bytes) {
+  if (bytes.length <= MAX_FILE_BYTES) return checkMapFile(path, bytes.toString('utf8'));
+  // A site's maps are not searched for `.env` values: those are looked for where the files are.
+  return scanLargeMap(path, lazyBytes(bytes.length, () => bytes), []);
+}
+
 /**
  * @param {URL} address
  * @param {string | null} homeOrigin the one site the file may be read from, or null for the page itself
- * @returns {Promise<{ text: string, sourceMapHeader: string | null, address: URL }>}
+ * @param {{ mostBytes: number, timeoutMs: number }} limits
+ * @returns {Promise<{ bytes: Buffer, text: string, sourceMapHeader: string | null, address: URL }>}
  *   `address` is where the file was finally read from
  * @throws when the server answered with something that cannot be used, with a short code
  *   as the message, and whatever `fetch` throws when it did not answer
  */
-async function fetchText(address, homeOrigin) {
-  const response = await request(address, homeOrigin);
+async function fetchFile(address, homeOrigin, limits) {
+  const response = await request(address, homeOrigin, limits.timeoutMs);
   if (!response) throw new Error('LEFT_THE_SITE');
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const text = await readCapped(response);
-  if (text === null) throw new Error(TOO_LARGE);
+  const bytes = await readCapped(response, limits.mostBytes);
+  if (bytes === null) throw new Error(TOO_LARGE);
   // ECMA-426 section 11.1.1: `sourcemap` is the header, `x-sourcemap` its deprecated name.
   const sourceMapHeader = response.headers.get('sourcemap') ?? response.headers.get('x-sourcemap');
-  return { text, sourceMapHeader, address: new URL(response.url) };
+  let text;
+  return {
+    bytes,
+    // Decoded once, when first asked for: a map is read as bytes and never is.
+    get text() {
+      text ??= bytes.toString('utf8');
+      return text;
+    },
+    sourceMapHeader,
+    address: new URL(response.url),
+  };
 }
 
 /**
@@ -164,12 +190,12 @@ async function fetchText(address, homeOrigin) {
  *
  * @returns {Promise<Response | null>} null when a redirect leads away or never ends
  */
-async function request(address, homeOrigin) {
+async function request(address, homeOrigin, timeoutMs) {
   let current = address;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     const response = await fetch(current, {
       headers: { 'user-agent': USER_AGENT },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       redirect: homeOrigin ? 'manual' : 'follow',
     });
     const isRedirect = homeOrigin && response.status >= 300 && response.status < 400;
@@ -183,10 +209,10 @@ async function request(address, homeOrigin) {
   return null;
 }
 
-/** Reads a response body as text. @returns {Promise<string | null>} null for one larger than the scanner reads */
-async function readCapped(response) {
+/** Reads a response body. @returns {Promise<Buffer | null>} null for one larger than `mostBytes` */
+async function readCapped(response, mostBytes) {
   // A server that states the size up front spares the download of what would be dropped anyway.
-  if (Number(response.headers.get('content-length')) > MAX_FILE_BYTES) {
+  if (Number(response.headers.get('content-length')) > mostBytes) {
     await response.body?.cancel();
     return null;
   }
@@ -194,8 +220,8 @@ async function readCapped(response) {
   let totalBytes = 0;
   for await (const chunk of response.body) {
     totalBytes += chunk.byteLength;
-    if (totalBytes > MAX_FILE_BYTES) return null;
+    if (totalBytes > mostBytes) return null;
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
 }
