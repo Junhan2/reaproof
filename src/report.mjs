@@ -25,7 +25,7 @@ const LEVEL_SEPARATOR = ' · ';
 // Projects that make an app to install, whose output is no website to check at an address.
 const APP_FRAMEWORKS = ['electron', 'tauri'];
 // The numbers of one file a rule's explanation speaks of: the file with the most of them.
-const FULLEST_COUNTS = ['names', 'types', 'members', 'ownFiles', 'dependencyFiles', 'functions', 'dependencies', 'methods'];
+const FULLEST_COUNTS = ['names', 'types', 'members', 'ownFiles', 'dependencyFiles', 'functions', 'dependencies', 'methods', 'ownClasses', 'namedClasses', 'strings'];
 // Terminal styles by the names Node's own `util.inspect.colors` gives them.
 const SEVERITY_STYLES = { critical: ['red', 'bold'], high: ['red'], medium: ['yellow'], info: ['cyan'] };
 const RISK_COLORS = { 'very-high': 'red', high: 'red', moderate: 'yellow', baseline: 'green', unrated: 'magenta' };
@@ -71,6 +71,8 @@ const KO = {
   functionsIn: (count) => `함수 이름 ${count}개`,
   methodsIn: (count) => `메서드 ${count}개`,
   typeCountIn: (count) => `형식 ${count}개`,
+  namedClassesIn: (named, own) => `클래스 ${own}개 중 ${named}개`,
+  stringsIn: (count) => `문자열 ${count}개`,
   debugFileIn: (path) => `디버그 파일 ${path}`,
   dependencyFilesIn: (count) => `의존 라이브러리 ${count}개`,
   forExample: (sample) => `예: ${sample}`,
@@ -244,6 +246,34 @@ const KO = {
         `윈도우 실행 파일 ${files}개에 적힌 디버그 파일(.pdb) 경로에 빌드한 컴퓨터의 홈 폴더가 들어 있습니다. 계정 이름과 폴더 구조가 보입니다.`,
         '디버그 파일 경로에는 파일 이름만 남기세요. MSVC 링커는 /PDBALTPATH:%_PDB%, .NET 은 PathMap 속성이 그 일을 합니다.',
         '고친 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다.',
+      ],
+    },
+    'android-debug-build': {
+      title: '안드로이드 앱이 개발용 빌드로 나가 있습니다',
+      body: ({ files, kinds }) => [
+        `앱 꾸러미 ${files}개가 개발할 때 쓰는 설정이나 키로 만들어졌습니다.`,
+        ...(kinds.has('debuggable')
+          ? ['android:debuggable 이 켜져 있어, 기기를 USB 로 연결한 사람은 누구나 실행 중인 앱에 디버거를 붙이고 앱의 파일과 메모리를 들여다볼 수 있습니다(adb 의 run-as, jdb).']
+          : []),
+        ...(kinds.has('test-only') ? ['android:testOnly 가 켜진 시험용 빌드입니다. 설치하려면 adb install -t 가 필요합니다.'] : []),
+        ...(kinds.has('debug-certificate') ? ['Android 빌드 도구가 컴퓨터마다 만드는 디버그 키(CN=Android Debug)로 서명돼 있습니다.'] : []),
+        'release 빌드(./gradlew assembleRelease 나 bundleRelease)로 다시 만들고, 직접 만든 업로드 키로 서명하세요. release 빌드는 debuggable 과 testOnly 를 켜지 않습니다.',
+        '다시 만든 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다.',
+      ],
+    },
+    'android-class-names': {
+      title: '안드로이드 앱의 클래스 이름이 개발할 때 이름 그대로입니다',
+      body: ({ files, ownClasses, namedClasses }) => [
+        `앱 꾸러미 ${files}개에서 앱 자신의 클래스 이름이 개발할 때 붙인 그대로입니다(가장 많은 것에 ${ownClasses}개 중 ${namedClasses}개). jadx 같은 무료 디컴파일러가 Java · Kotlin 코드를 거의 쓴 그대로 되돌립니다.`,
+        'release 빌드에서 R8 의 코드 줄이기를 켜세요(build.gradle 의 isMinifyEnabled = true, 또는 minifyEnabled true). 클래스와 메서드 이름이 a, b 같은 짧은 이름으로 바뀝니다. 함께 나오는 mapping.txt 는 지우지 말고 배포물 밖에 보관하세요. 오류 기록을 풀 때 씁니다.',
+        '다시 만든 뒤 reaproof 를 다시 돌려 이 항목이 사라지면 된 것입니다.',
+      ],
+    },
+    'hermes-bytecode': {
+      title: 'React Native 코드가 Hermes 바이트코드로 들어 있습니다',
+      body: ({ files, functions, strings }) => [
+        `Hermes 바이트코드 ${files}개가 있습니다(가장 큰 것에 함수 ${functions}개, 문자열 ${strings}개). hermes-dec 같은 무료 도구가 함수마다 JavaScript 에 가까운 코드로 되돌리고, 문자열은 그대로 읽힙니다.`,
+        'Hermes 로 컴파일해도 숨겨지지 않습니다. 숨겨야 할 로직과 열쇠는 서버에 두세요.',
       ],
     },
     'developer-file': {
@@ -514,6 +544,8 @@ const EN = {
   functionsIn: (count) => `${count} function names`,
   methodsIn: (count) => `${count} methods`,
   typeCountIn: (count) => `${count} types`,
+  namedClassesIn: (named, own) => `${named} of ${own} classes`,
+  stringsIn: (count) => `${count} strings`,
   debugFileIn: (path) => `debug file ${path}`,
   dependencyFilesIn: (count) => `${count} of dependencies`,
   forExample: (sample) => `for example ${sample}`,
@@ -690,6 +722,34 @@ const EN = {
         `${files} Windows program file(s) name their debug file (.pdb) by a path under the home folder of the machine that built them, which shows its account name and folder layout.`,
         'Leave only the file name in that path: /PDBALTPATH:%_PDB% does it for the MSVC linker, the PathMap property for .NET.',
         'Run reaproof again afterwards: when this finding is gone, it worked.',
+      ],
+    },
+    'android-debug-build': {
+      title: 'An Android app ships as a development build',
+      body: ({ files, kinds }) => [
+        `${files} app package(s) were built with settings or a key meant for development.`,
+        ...(kinds.has('debuggable')
+          ? ['android:debuggable is on: anyone who connects the device over USB can attach a debugger to the running app and look into its files and memory (adb run-as, jdb).']
+          : []),
+        ...(kinds.has('test-only') ? ['android:testOnly is on: it is a test build, which takes adb install -t to install.'] : []),
+        ...(kinds.has('debug-certificate') ? ['It is signed with the debug key that Android’s build tools make on each machine (CN=Android Debug).'] : []),
+        'Build it again as a release build (./gradlew assembleRelease or bundleRelease) and sign it with an upload key of your own. A release build turns neither debuggable nor testOnly on.',
+        'Run reaproof again afterwards: when this finding is gone, it worked.',
+      ],
+    },
+    'android-class-names': {
+      title: 'The classes of an Android app keep the names they were given',
+      body: ({ files, ownClasses, namedClasses }) => [
+        `In ${files} app package(s) the app’s own classes keep their names: ${namedClasses} of ${ownClasses} in the one with the most. A free decompiler such as jadx turns the Java and Kotlin code back into code that reads almost as written.`,
+        'Turn on R8’s shrinking in the release build (isMinifyEnabled = true in build.gradle, or minifyEnabled true): classes and methods get short names such as a and b. Keep the mapping.txt it writes, outside what ships: it is what makes crash reports readable.',
+        'Run reaproof again afterwards: when this finding is gone, it worked.',
+      ],
+    },
+    'hermes-bytecode': {
+      title: 'React Native code ships as Hermes bytecode',
+      body: ({ files, functions, strings }) => [
+        `${files} file(s) of Hermes bytecode, the largest with ${functions} functions and ${strings} strings. A free tool such as hermes-dec turns each function back into code close to JavaScript, and the strings read as they are.`,
+        'Compiling with Hermes hides nothing. Keep logic and keys that must stay private on a server.',
       ],
     },
     'developer-file': {
@@ -978,6 +1038,11 @@ export function createReporter(language) {
       return `- ${path} (${facts.join(', ')})`;
     }
     if (rule === 'debug-file-path') return `- ${path} (${t.debugFileIn(detail.debugFile)})`;
+    if (rule === 'android-debug-build') return `- ${path}: ${[detail.appPackage, ...detail.kinds].filter(Boolean).join(' · ')}`;
+    if (rule === 'android-class-names') {
+      return `- ${path} (${withSample(t.namedClassesIn(detail.namedClasses, detail.ownClasses), detail.sample)})`;
+    }
+    if (rule === 'hermes-bytecode') return `- ${path} (Hermes ${detail.version} · ${t.functionsIn(detail.functions)} · ${t.stringsIn(detail.strings)})`;
     if (rule === 'go-program') {
       const facts = [detail.goVersion, detail.modulePath, withSample(t.ownFilesIn(detail.ownFiles), detail.sample), t.dependencyFilesIn(detail.dependencyFiles)];
       if (detail.functions) facts.push(t.functionsIn(detail.functions));
@@ -1025,7 +1090,7 @@ export function createReporter(language) {
       ...Object.fromEntries(FULLEST_COUNTS.map((field) => [field, fullest?.detail[field] ?? 0])),
       fieldNames: sumOf('swiftFieldNames'),
       builders: findings.filter(({ detail }) => detail.namesBuilder).length,
-      kinds: new Set(findings.map(({ detail }) => detail.kind)),
+      kinds: new Set(findings.flatMap(({ detail }) => detail.kinds ?? [detail.kind])),
       formats: new Set(findings.map(({ detail }) => detail.format)),
       debugInfo: findings.filter(({ detail }) => detail.debugSections > 0).length,
       // A map too large to read whole has no counts, and the explanation says so.

@@ -84,6 +84,34 @@ export function textBeforeZero(bytes, encoding) {
   return bytes.toString(encoding, 0, end === -1 ? bytes.length : end);
 }
 
+/**
+ * Bytes read two to a character. Only whole pairs are decoded, which is what Node does with
+ * a byte left over anyway. Node 24.21.0 on Linux and Windows corrupts its own memory when
+ * it decodes an odd number of bytes that start at an odd place in their buffer, and the
+ * reading that starts on the second byte of a stretch starts at just such a place.
+ */
+export function utf16Text(bytes) {
+  return bytes.subarray(0, bytes.length - (bytes.length % 2)).toString('utf16le');
+}
+
+/**
+ * An unsigned LEB128 number, the varint of Go, WebAssembly and protobuf: seven bits to a
+ * byte, the lowest first, for as long as the top bit is set.
+ *
+ * @param {number} [mostBytes] five hold any 32-bit number; protobuf writes up to ten
+ * @returns {[number, number]} the number and how many bytes it took
+ * @throws when it runs on past `mostBytes` or past the end
+ */
+export function readVarint(bytes, at, mostBytes = 5) {
+  let value = 0;
+  for (let used = 0; used < mostBytes && at + used < bytes.length; used += 1) {
+    const byte = bytes[at + used];
+    value += (byte & 0x7f) * 2 ** (7 * used);
+    if (byte < 0x80) return [value, used + 1];
+  }
+  throw new Error('not a varint');
+}
+
 /** @returns what `read` returns, or null when what it reads does not hold what it should */
 export function unlessMalformed(read) {
   try {
