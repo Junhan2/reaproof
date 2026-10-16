@@ -18,6 +18,7 @@ const RESOURCE_MAP = 0x0180;
 const START_ELEMENT = 0x0102;
 const UTF8_FLAG = 0x100;
 const NO_STRING = 0xffffffff;
+const ATTRIBUTE_BYTES = 20;
 const MAX_STRINGS = 200_000;
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 // Protobuf XML: a node holds an element (1); an element has a name (3), attributes (4) and
@@ -142,7 +143,12 @@ export function startDexClasses({ appPackage, classes }) {
  * @param {ReturnType<typeof startDexClasses>} found
  */
 export function collectDexClasses(name, source, found) {
-  if (DEX_FILE.test(name)) unlessMalformed(() => countClasses(source, found));
+  // A file that turns out malformed part of the way through adds nothing.
+  const counted = DEX_FILE.test(name) ? unlessMalformed(() => countClasses(source, found)) : null;
+  if (!counted) return;
+  found.ownClasses += counted.ownClasses;
+  found.namedClasses += counted.namedClasses;
+  found.sample ??= counted.sample;
 }
 
 /** The note for an app whose own classes keep their names. */
@@ -222,7 +228,13 @@ function readElement(chunk, strings, resourceIds, found) {
   if (element !== 'manifest' && !COMPONENTS.has(element)) return;
   const attributesAt = 16 + chunk.readUInt16LE(24);
   const attributeBytes = chunk.readUInt16LE(26);
-  const attributes = Array.from({ length: chunk.readUInt16LE(28) }, (_, index) => {
+  const count = chunk.readUInt16LE(28);
+  // Each attribute takes twenty bytes or more of its own inside the element. Ones made to
+  // share a place would let a small manifest cost far more than its size to read.
+  if (attributeBytes < ATTRIBUTE_BYTES || attributesAt + count * attributeBytes > chunk.length) {
+    throw new Error('attributes that do not fit in their element');
+  }
+  const attributes = Array.from({ length: count }, (_, index) => {
     const at = attributesAt + index * attributeBytes;
     const nameIndex = chunk.readUInt32LE(at + 4);
     const textIndex = chunk.readUInt32LE(at + 8);
@@ -242,9 +254,15 @@ function readStringPool(chunk) {
   const isUtf8 = (chunk.readUInt32LE(16) & UTF8_FLAG) !== 0;
   const stringsAt = chunk.readUInt32LE(20);
   const offsetsAt = chunk.readUInt16LE(2);
+  // A pool keeps each string once, after the one before. Strings made to share their bytes
+  // would let a small pool decode to far more than it holds.
+  let characters = 0;
   return Array.from({ length: count }, (_, index) => {
     const at = stringsAt + chunk.readUInt32LE(offsetsAt + index * 4);
-    return isUtf8 ? readUtf8String(chunk, at) : readUtf16String(chunk, at);
+    const text = isUtf8 ? readUtf8String(chunk, at) : readUtf16String(chunk, at);
+    characters += text.length;
+    if (characters > chunk.length) throw new Error('strings that share their bytes');
+    return text;
   });
 }
 
@@ -351,15 +369,19 @@ function holdsDebugSubject(bytes) {
   return DEBUG_SUBJECTS.some((subject) => bytes.includes(subject));
 }
 
-function countClasses(source, found) {
+/** @returns {{ ownClasses: number, namedClasses: number, sample: string | null } | null} null for another kind of file */
+function countClasses(source, { prefix, manifestClasses }) {
   const header = source.read(0, DEX_HEADER_BYTES);
-  if (!header.subarray(0, DEX_MAGIC.length).equals(DEX_MAGIC)) return;
+  if (!header.subarray(0, DEX_MAGIC.length).equals(DEX_MAGIC)) return null;
   // Each table is a count, then where it starts.
   const table = (at) => [header.readUInt32LE(at), header.readUInt32LE(at + 4)];
   const [stringCount, stringsAt] = table(STRING_IDS_AT);
   const [typeCount, typesAt] = table(TYPE_IDS_AT);
   const [classCount, classesAt] = table(CLASS_DEFS_AT);
   if (classCount > MAX_CLASSES) throw new Error('implausibly many classes');
+  // Each class is a type of its own, named by a string of its own: descriptors made to share
+  // their bytes would let a small file cost far more than its size to read.
+  let characters = 0;
   const descriptorOf = (typeIndex) => {
     if (typeIndex >= typeCount) throw new Error('a class of a type that is not there');
     const stringIndex = source.read(typesAt + typeIndex * 4, 4).readUInt32LE(0);
@@ -369,21 +391,26 @@ function countClasses(source, found) {
     // The length in UTF-16 units comes first, as an unsigned LEB128; the text ends with a zero.
     let start = 0;
     while (data[start] & 0x80) start += 1;
-    return textBeforeZero(data.subarray(start + 1), 'utf8');
+    const descriptor = textBeforeZero(data.subarray(start + 1), 'utf8');
+    characters += descriptor.length;
+    if (characters > source.byteLength) throw new Error('descriptors that share their bytes');
+    return descriptor;
   };
+  const counted = { ownClasses: 0, namedClasses: 0, sample: null };
   for (const block of readRecords((position, length) => source.read(position, length), classesAt, classCount, CLASS_DEF_BYTES)) {
     for (let at = 0; at < block.length; at += CLASS_DEF_BYTES) {
       const descriptor = descriptorOf(block.readUInt32LE(at));
-      if (!descriptor.startsWith(found.prefix)) continue;
+      if (!descriptor.startsWith(prefix)) continue;
       // An inner class is named after the class it is in, which for one the manifest names is kept.
       const outer = descriptor.slice(0, -1).split('$')[0];
-      if (found.manifestClasses.has(`${outer};`)) continue;
+      if (manifestClasses.has(`${outer};`)) continue;
       const simpleName = outer.slice(outer.lastIndexOf('/') + 1);
       if (GENERATED_CLASS.test(simpleName)) continue;
-      found.ownClasses += 1;
+      counted.ownClasses += 1;
       if (!GIVEN_NAME.test(simpleName)) continue;
-      found.namedClasses += 1;
-      found.sample ??= outer.slice(1).replaceAll('/', '.');
+      counted.namedClasses += 1;
+      counted.sample ??= outer.slice(1).replaceAll('/', '.');
     }
   }
+  return counted;
 }
