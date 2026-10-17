@@ -11,12 +11,12 @@
 <meta property="og:description" content="Before you ship, see what an AI agent could lift from your app, and close it in one command.">
 <meta property="og:url" content="https://junhan2.github.io/reaproof/">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#fafaf7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0c0d11" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141412" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&amp;family=Inter+Tight:wght@500;600&amp;family=Inter:wght@400;500;600&amp;display=swap">
 <link rel="stylesheet" href="style.css">
 <script src="main.js" defer></script>
 </head>
@@ -32,7 +32,7 @@
 <header class="site-header">
   <nav class="nav wrap" aria-label="Main">
     <a class="brand" href="#top" aria-label="Reaproof, back to top">
-      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M12 9H8.5v14H12M20 9h3.5v14H20"/><circle cx="16" cy="16" r="3"/></svg>
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32"/><path d="M12 9H8.5v14H12M20 9h3.5v14H20"/><circle cx="16" cy="16" r="3"/></svg>
       <span>Reaproof</span>
     </a>
     <ul class="nav-links">
@@ -55,24 +55,25 @@
 
   <!-- Hero -->
   <section class="hero" id="top" aria-labelledby="hero-title">
-    <div class="wrap hero-grid">
-      <div class="hero-copy">
-        <p class="eyebrow">Open source · MIT · Node.js 18.3 or later</p>
-        <h1 id="hero-title">See what an AI agent could lift from your app. Close it in one command.</h1>
-        <p class="lead">Tools such as <a href="https://github.com/morluto/rea">rea</a> let a coding agent read a shipped app without its source, explain how it works and rebuild it. Reaproof finds what makes that easy, such as a source map with your original code, a server key in the bundle or a <code>.git</code> folder in the output. It rates the risk in plain words and takes out what is safe to take out.</p>
-        <div class="command" role="group" aria-label="Command to run">
-          <span class="command-prompt" aria-hidden="true">$</span>
-          <code>npx reaproof</code>
-          <button class="copy" type="button" data-copy="npx reaproof">Copy</button>
-        </div>
-        <p class="fine">It reads first and asks before it changes anything. Nothing to install, nothing to configure.</p>
-        <div class="hero-actions">
-          <a class="btn btn-primary" href="#start">Get started</a>
-          <a class="btn btn-quiet" href="https://github.com/Junhan2/reaproof#readme">Read the full guide</a>
-        </div>
+    <div class="wrap hero-copy">
+      <p class="eyebrow">Open source · MIT · Node.js 18.3 or later</p>
+      <h1 id="hero-title">See what an AI agent could lift from your app. Close it in one command.</h1>
+      <p class="lead">Tools such as <a href="https://github.com/morluto/rea">rea</a> let a coding agent read a shipped app without its source, explain how it works and rebuild it. Reaproof finds what makes that easy, such as a source map with your original code, a server key in the bundle or a <code>.git</code> folder in the output. It rates the risk in plain words and takes out what is safe to take out.</p>
+      <div class="command" role="group" aria-label="Command to run">
+        <span class="command-prompt" aria-hidden="true">$</span>
+        <code>npx reaproof</code>
+        <button class="copy" type="button" data-copy="npx reaproof">Copy</button>
       </div>
-      <figure class="terminal">
-        <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span><p>npx reaproof</p></div>
+      <p class="fine">It reads first and asks before it changes anything. Nothing to install, nothing to configure.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#start">Get started</a>
+        <a class="btn btn-quiet" href="https://github.com/Junhan2/reaproof#readme">Read the full guide</a>
+      </div>
+    </div>
+    <div class="hero-band">
+      <div class="wrap">
+        <figure class="terminal">
+          <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span><p>npx reaproof</p></div>
 <pre tabindex="0">Checking. This only reads; nothing is changed.
 Target: dist (output folders picked by name, next to package.json)
 Files read: 3
@@ -103,15 +104,16 @@ rea risk: <span class="t-red t-bold">very high</span> → <span class="t-green t
 Leaks found: 1 kind (critical 1) → none
 Kept at: /tmp/reaproof-demo/backups/shop-web-48f3456db025/2026-10-15T16-20-49-622Z
 Undo: reaproof undo</pre>
-        <figcaption>A real run on our web test app, recorded in a terminal. Lines left out are marked ⋯; the <a href="https://github.com/Junhan2/reaproof#how-it-works">whole output</a> is in the guide.</figcaption>
-      </figure>
+          <figcaption>A real run on our web test app, recorded in a terminal. Lines left out are marked ⋯; the <a href="https://github.com/Junhan2/reaproof#how-it-works">whole output</a> is in the guide.</figcaption>
+        </figure>
+      </div>
     </div>
   </section>
 
   <!-- HowItWorks -->
   <section class="section" id="how" aria-labelledby="how-title">
     <div class="wrap">
-      <p class="kicker">How it works</p>
+      <p class="kicker"><span>How it works</span></p>
       <h2 id="how-title">It reads, rates and explains. Then it asks.</h2>
       <ol class="steps">
         <li class="step">
@@ -191,9 +193,9 @@ Undo: reaproof undo</pre>
   </section>
 
   <!-- Benchmarks -->
-  <section class="section section-alt" id="benchmarks" aria-labelledby="bench-title">
+  <section class="section" id="benchmarks" aria-labelledby="bench-title">
     <div class="wrap">
-      <p class="kicker">Benchmarks</p>
+      <p class="kicker"><span>Benchmarks</span></p>
       <h2 id="bench-title">Measured, and checked against the tools that define the answer</h2>
 
       <div class="bench-lead">
@@ -257,7 +259,7 @@ Undo: reaproof undo</pre>
   <!-- ProductFeatures -->
   <section class="section" id="checks" aria-labelledby="checks-title">
     <div class="wrap">
-      <p class="kicker">What it checks</p>
+      <p class="kicker"><span>What it checks</span></p>
       <h2 id="checks-title">The leaks that make an app easy to copy</h2>
       <div class="feature-grid">
         <article class="feature">
@@ -296,9 +298,9 @@ Undo: reaproof undo</pre>
   </section>
 
   <!-- UseCases -->
-  <section class="section section-alt" id="use" aria-labelledby="use-title">
+  <section class="section" id="use" aria-labelledby="use-title">
     <div class="wrap">
-      <p class="kicker">Ways to use it</p>
+      <p class="kicker"><span>Ways to use it</span></p>
       <h2 id="use-title">Yourself, with your agent, or in CI</h2>
       <div class="use-grid">
         <article class="use">
@@ -344,7 +346,7 @@ Undo: reaproof undo</pre>
   <!-- Industries -->
   <section class="section" id="targets" aria-labelledby="targets-title">
     <div class="wrap">
-      <p class="kicker">What you can point it at</p>
+      <p class="kicker"><span>What you can point it at</span></p>
       <h2 id="targets-title">Web, desktop, mobile, programs and the archives they ship in</h2>
       <div class="target-grid">
         <article class="target">
@@ -373,11 +375,11 @@ Undo: reaproof undo</pre>
   </section>
 
   <!-- EnterpriseReady -->
-  <section class="section section-alt" id="ci" aria-labelledby="ci-title">
-    <div class="wrap ci-grid">
-      <div>
-        <p class="kicker">Ready for CI and review</p>
-        <h2 id="ci-title">Made to sit in a release pipeline</h2>
+  <section class="section" id="ci" aria-labelledby="ci-title">
+    <div class="wrap">
+      <p class="kicker"><span>Ready for CI and review</span></p>
+      <h2 id="ci-title">Made to sit in a release pipeline</h2>
+      <div class="ci-grid">
         <ul class="ticks">
           <li><strong>Exit codes that mean one thing each</strong>, so a release check never takes "could not read" for a pass.</li>
           <li><strong><code>--fail-on critical|high|medium</code></strong> sets the mildest finding that fails the step.</li>
@@ -387,22 +389,21 @@ Undo: reaproof undo</pre>
           <li><strong>Reads only by default.</strong> <code>fix</code> shows the list and asks, keeps a backup outside the project, and <code>undo</code> reverses it.</li>
           <li><strong>No dependencies. MIT.</strong> Node.js 18.3 or later on Linux, macOS and Windows.</li>
         </ul>
-      </div>
-      <div class="ci-side">
-        <div class="table-wrap">
-          <table class="exit">
-            <caption>Exit codes</caption>
-            <tbody>
-              <tr><th scope="row">0</th><td>No leak at the <code>--fail-on</code> level or above (high, unless you set it)</td></tr>
-              <tr><th scope="row">1</th><td>A leak at that level or above would ship</td></tr>
-              <tr><th scope="row">2</th><td>A usage error, or a target that could not be settled on</td></tr>
-              <tr><th scope="row">3</th><td>What ships could not be read: not rated</td></tr>
-              <tr><th scope="row">4</th><td>Reaproof itself ran into an error</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <figure class="yaml">
-          <figcaption>GitHub Actions, with code scanning</figcaption>
+        <div class="ci-side">
+          <div class="table-wrap">
+            <table class="exit">
+              <caption>Exit codes</caption>
+              <tbody>
+                <tr><th scope="row">0</th><td>No leak at the <code>--fail-on</code> level or above (high, unless you set it)</td></tr>
+                <tr><th scope="row">1</th><td>A leak at that level or above would ship</td></tr>
+                <tr><th scope="row">2</th><td>A usage error, or a target that could not be settled on</td></tr>
+                <tr><th scope="row">3</th><td>What ships could not be read: not rated</td></tr>
+                <tr><th scope="row">4</th><td>Reaproof itself ran into an error</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <figure class="yaml">
+            <figcaption>GitHub Actions, with code scanning</figcaption>
 <pre tabindex="0"><code>permissions:
   security-events: write
 steps:
@@ -414,7 +415,8 @@ steps:
     if: ${{ !cancelled() }}
     with:
       sarif_file: reaproof.sarif</code></pre>
-        </figure>
+          </figure>
+        </div>
       </div>
     </div>
   </section>
@@ -422,7 +424,7 @@ steps:
   <!-- Testimonials -->
   <section class="section" id="runs" aria-labelledby="runs-title">
     <div class="wrap">
-      <p class="kicker">Real runs</p>
+      <p class="kicker"><span>Real runs</span></p>
       <h2 id="runs-title">What the report said, word for word</h2>
       <div class="run-grid">
         <figure class="run">
@@ -468,9 +470,9 @@ steps:
   </section>
 
   <!-- PreFooter -->
-  <section class="section section-alt" id="start" aria-labelledby="start-title">
+  <section class="section" id="start" aria-labelledby="start-title">
     <div class="wrap">
-      <p class="kicker">Get started</p>
+      <p class="kicker"><span>Get started</span></p>
       <h2 id="start-title">Your first check, in four steps</h2>
       <div class="start-grid">
         <ol class="start-steps">
@@ -509,7 +511,7 @@ steps:
   <div class="wrap footer-grid">
     <div>
       <p class="brand brand-small">
-        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M12 9H8.5v14H12M20 9h3.5v14H20"/><circle cx="16" cy="16" r="3"/></svg>
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32"/><path d="M12 9H8.5v14H12M20 9h3.5v14H20"/><circle cx="16" cy="16" r="3"/></svg>
         <span>Reaproof</span>
       </p>
       <p class="small">Check software and sites you own. MIT License.</p>

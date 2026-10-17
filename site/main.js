@@ -38,3 +38,22 @@ function announce(button, label, message) {
     button.disabled = false;
   }, 1600);
 }
+
+// Section tabs: the square on a section's tab fills while that section crosses the middle of the
+// screen. A band 1% of the screen tall across the middle does it without a scroll listener;
+// without the observer the tabs stay as drawn.
+
+if ('IntersectionObserver' in window) {
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        entry.target.querySelector('.kicker')?.classList.toggle('is-current', entry.isIntersecting);
+      }
+    },
+    { rootMargin: '-49% 0px -50% 0px' },
+  );
+  for (const tab of document.querySelectorAll('.kicker')) {
+    const section = tab.closest('section');
+    if (section) observer.observe(section);
+  }
+}
