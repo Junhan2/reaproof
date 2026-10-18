@@ -2,11 +2,12 @@
 
 What changed in each release published to npm, newest first.
 
-## Unreleased (not published yet)
+## 0.9.0 (2026-10-18)
 
 - Opens the result as a page in your browser when you run it at a terminal, for whoever a terminal report says little to: the rating large on its scale, what to do next with the fix it can make first, then each kind of leak as a card with where it was found and how to fix it, in the words the terminal uses. After `fix`, the page opens again with the rating before the fix struck out, the build setting that keeps maps away, and how to undo it. On 45 test targets every page shows the rating, the leak counts and the items of each kind that the JSON holds.
 - The page is one HTML file with no script and nothing to load, so text copied from a scanned file is shown as text and nothing in it runs. It is kept in `~/.reaproof/pages`, never in the project, and no browser is opened in CI, over SSH or on Linux without a display. `--no-open` keeps the browser closed.
-- With `--json`, the result names its page in `page`, so an agent can show it to you. The text a pipe gets and the rest of the JSON are as they were.
+- With `--json`, the result names its page in `page`, so an agent can show it to you, and the skill tells it to. The text a pipe gets and the rest of the JSON are as they were.
+- Takes an empty `REAPROOF_HOME` for unset: 0.8.0 then kept backups in a `backups` folder under the current one, which can be the build output.
 
 ## 0.8.0 (2026-10-18)
 

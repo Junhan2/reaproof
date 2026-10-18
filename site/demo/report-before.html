@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Reaproof · Check result · very high</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #171614; --muted: #5f5b53; --line: #e4e1da; --panel: #f6f5f1;
+  --critical: #b3261e; --critical-tint: #fceeec; --high: #b9410e; --high-tint: #fdf0e8;
+  --medium: #855d00; --medium-tint: #fbf3dc; --info: #44505f; --info-tint: #eef0f3;
+  --baseline: #1e7639; --unrated: #6a3fb5;
+  --sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141412; --fg: #ecebe6; --muted: #a9a59c; --line: #33312c; --panel: #1d1c19;
+    --critical: #ff8f80; --critical-tint: #3b1915; --high: #ffa466; --high-tint: #3b2213;
+    --medium: #f0c95a; --medium-tint: #332a10; --info: #b9c3d0; --info-tint: #20242a;
+    --baseline: #72d48f; --unrated: #c2a6ff;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 var(--sans); -webkit-text-size-adjust: 100%; }
+.wrap { max-width: 880px; margin: 0 auto; padding-inline: 20px; }
+h1, h2, h3 { margin: 0; line-height: 1.25; text-wrap: balance; }
+h2 { font-size: 1.25rem; }
+p, ul, ol { margin: 0; }
+code { font: 0.8125rem/1.5 var(--mono); overflow-wrap: anywhere; }
+.bar { border-bottom: 1px solid var(--fg); }
+.bar .wrap { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; padding-block: 14px; }
+.brand { font-weight: 700; letter-spacing: -0.01em; }
+.meta { color: var(--muted); font: 0.8125rem/1.4 var(--mono); }
+main { display: grid; gap: 32px; padding-block: 28px 12px; }
+section { display: grid; gap: 14px; min-width: 0; }
+.risk-very-high { --risk: var(--critical); }
+.risk-high { --risk: var(--high); }
+.risk-moderate { --risk: var(--medium); }
+.risk-baseline { --risk: var(--baseline); }
+.risk-unrated { --risk: var(--unrated); }
+.verdict { padding: 24px; border: 1px solid var(--fg); }
+.eyebrow { color: var(--muted); font: 0.8125rem/1 var(--mono); letter-spacing: 0.02em; }
+.verdict h1 { color: var(--risk); font-size: clamp(2.5rem, 9vw, 4rem); letter-spacing: -0.02em; }
+.scale { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 0; list-style: none; }
+.scale li { padding: 8px 4px; border: 1px solid var(--line); color: var(--muted); font-size: 0.8125rem; text-align: center; overflow-wrap: anywhere; }
+.scale .is-current { background: var(--risk); border-color: var(--risk); color: var(--bg); font-weight: 700; }
+.summary { font-size: 1.0625rem; }
+.read { display: grid; gap: 2px; padding: 0; list-style: none; color: var(--muted); font-size: 0.875rem; overflow-wrap: anywhere; }
+.was { color: var(--muted); }
+.was s { color: var(--risk); font-weight: 600; }
+.callout { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--fg); background: var(--panel); }
+.steps { display: grid; gap: 8px; padding-left: 1.4em; }
+.plain { display: grid; gap: 6px; padding-left: 1.2em; overflow-wrap: anywhere; }
+.fixed, .unread { padding: 18px 20px; border: 1px solid var(--line); background: var(--panel); }
+.count { color: var(--muted); font: 0.875rem/1 var(--mono); }
+.cards { display: grid; gap: 14px; }
+.finding { display: grid; gap: 10px; min-width: 0; padding: 18px 20px; border: 1px solid var(--line); border-left: 4px solid var(--sev); }
+.sev-critical { --sev: var(--critical); --tint: var(--critical-tint); }
+.sev-high { --sev: var(--high); --tint: var(--high-tint); }
+.sev-medium { --sev: var(--medium); --tint: var(--medium-tint); }
+.sev-info { --sev: var(--info); --tint: var(--info-tint); }
+.chip { justify-self: start; padding: 3px 8px; background: var(--tint); color: var(--sev); font: 600 0.75rem/1.3 var(--mono); letter-spacing: 0.04em; }
+.finding h3 { font-size: 1.125rem; }
+details { padding-top: 10px; border-top: 1px solid var(--line); }
+summary { color: var(--muted); font-size: 0.875rem; cursor: pointer; }
+.items { display: grid; gap: 6px; margin-top: 10px; padding: 0; list-style: none; }
+.more { color: var(--muted); font-size: 0.875rem; }
+.hints { display: grid; gap: 6px; padding: 10px 14px; background: var(--panel); font-size: 0.9375rem; list-style: none; }
+.foot { display: grid; gap: 6px; margin-top: 20px; padding-block: 20px 40px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.8125rem; }
+@media (max-width: 520px) {
+  .wrap { padding-inline: 16px; }
+  .verdict, .fixed, .unread { padding: 18px 16px; }
+  .finding { padding: 16px; }
+  .scale li { padding: 6px 2px; font-size: 0.75rem; }
+}
+</style>
+</head>
+<body>
+<header class="bar"><div class="wrap"><p class="brand">Reaproof</p><p class="meta">Check result · <time datetime="2026-10-18T09:27:36.212Z">2026-10-18 09:27</time> · 0.9.0</p></div></header>
+<main class="wrap" data-risk="very-high" data-critical="1" data-high="0" data-medium="0">
+<section class="verdict risk-very-high" aria-labelledby="verdict-level">
+<p class="eyebrow">rea risk</p>
+<h1 id="verdict-level">very high</h1>
+
+<ol class="scale" aria-label="Levels"><li class="is-current" aria-current="true">very high</li><li>high</li><li>moderate</li><li>baseline</li></ol>
+<p class="summary">A tool like rea can take your original source or your secret values as they are.</p>
+<p class="leak-count">Leaks found: <strong>1 kind (critical 1)</strong></p>
+<ul class="read"><li>Target: dist (output folders picked by name, next to package.json)</li><li>Files read: 3</li></ul>
+</section>
+<section class="next" aria-labelledby="next-title">
+<h2 id="next-title">What to do next</h2>
+<p class="callout">1 map file(s) can be taken out for you: answer y in the terminal, or run npx reaproof fix. They are kept in a backup, and npx reaproof undo puts them back.</p>
+<ol class="steps"><li>Fix the findings above from the top: the most damaging come first.</li><li>Then rebuild and run npx reaproof again. A finding that is gone is fixed.</li><li>After deploying, check the live site too: npx reaproof https://your-site</li></ol>
+</section>
+
+
+<section class="leaks" aria-labelledby="leaks-title">
+<h2 id="leaks-title">Leaks <span class="count">1</span></h2>
+<div class="cards">
+<article class="finding sev-critical" data-rule="sourcemap-sources" data-items="1">
+<p class="chip">CRITICAL</p>
+<h3>Your original source code is public</h3>
+<p>1 source map file(s) contain the full text of 4 original file(s).</p>
+<p>Anyone who downloads them reads the code exactly as you wrote it.</p>
+<details open><summary>The list: 1</summary><ul class="items"><li><code>dist/index.js.map (originals: ../../../src/pricing.ts, ../../../src/license.ts, ../../../src/client.ts, ../../../src/index.ts)</code></li></ul></details>
+<ul class="hints"><li>Fix: reaproof fix (takes the map files out of the output; can be undone)</li></ul>
+</article>
+</div>
+</section>
+<section class="build" aria-labelledby="build-title">
+<h2 id="build-title">To keep them from coming back on the next build:</h2>
+<ul class="plain"><li>Turn off production source maps in your build tool settings.</li><li>If an error tracker needs the maps, upload them there and then delete them from the output.</li></ul>
+</section>
+<section class="notes" aria-labelledby="notes-title">
+<h2 id="notes-title">Good to know <span class="count">1</span></h2>
+<div class="cards">
+<article class="finding sev-info" data-rule="endpoint" data-items="1">
+<p class="chip">NOTE</p>
+<h3>Server addresses that read straight from the code</h3>
+<p>1 server address(es) are in the code as they are. They cannot be hidden.</p>
+<p>For each one, check that it is safe to call without signing in and never returns another user’s data.</p>
+<details open><summary>The list: 1</summary><ul class="items"><li><code>https://api.shop-lab.test/v2</code></li></ul></details>
+
+</article>
+</div>
+</section>
+<section class="limits" aria-labelledby="limits-title">
+<h2 id="limits-title">What cannot be hidden</h2>
+<ul class="plain"><li>Screen structure and the server addresses you call cannot be hidden once they reach a user device.</li><li>Compute anything that must not be copied, such as pricing or permission checks, on a server.</li><li>To see what is actually readable in the JavaScript, run reaproof measure.</li></ul>
+</section>
+</main>
+<footer class="wrap foot"><p>This page says what the terminal said. Paths, file names, addresses and previews are copied from the checked files, and keys are never written in full.</p></footer>
+</body>
+</html>

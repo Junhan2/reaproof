@@ -18,6 +18,7 @@ The user may have no security background. Explain every finding by its effect on
    - `explain.unread` also names folders that could not be opened, files over 30 MB that were searched for keys alone, and what the project's `.reaproofignore` left out (`ignored`). Say each of these to the user.
    - Never add a pattern to `.reaproofignore` to make a finding go away. Only the user decides that a file is known and accepted, and a file left out still ships.
    - For GitHub code scanning in CI, `npx reaproof --sarif` prints the same result as SARIF. Do not use it together with `--json`.
+   - `page` is the path of a file that shows the same result as a page in a browser: the rating, what to do next, and each finding with where it is and how to fix it. When it is there, tell the user where it is and offer to open it, so they can see the result laid out as well as read your summary.
 3. Tell the user the risk level first, then what is exposed, why it matters and what you propose to change. Start with critical and high findings. Say what `explain.unread` lists as well, because it limits what the result covers.
 4. After the user agrees, apply the fixes below.
 5. Rebuild and run `npx reaproof` again to confirm.

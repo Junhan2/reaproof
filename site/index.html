@@ -25,7 +25,7 @@
 
 <!-- AnnouncementBar -->
 <aside class="announce" aria-label="Announcement">
-  <p class="wrap"><strong>New in 0.8.0:</strong> SvelteKit, Astro, Nuxt and React Router builds checked for what reaches browsers, Gemini keys, and your CI job's secrets compared with what ships. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.8.0">Release notes</a></p>
+  <p class="wrap"><strong>New in 0.9.0:</strong> each result opens as a page in your browser, and a fix shows the rating before and after. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.9.0">Release notes</a></p>
 </aside>
 
 <!-- Nav -->
@@ -72,39 +72,29 @@
     </div>
     <div class="hero-band">
       <div class="wrap">
-        <figure class="terminal">
-          <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span><p>npx reaproof</p></div>
-<pre tabindex="0">Checking. This only reads; nothing is changed.
-Target: dist (output folders picked by name, next to package.json)
-Files read: 3
-
-rea risk: <span class="t-red t-bold">very high</span>
-  Levels: <span class="t-red t-bold">[very high]</span> · <span class="t-dim">high</span> · <span class="t-dim">moderate</span> · <span class="t-dim">baseline</span>
-  A tool like rea can take your original source or your secret values as they are.
-Leaks found: 1 kind (critical 1)
-
-<span class="t-red t-bold">[CRITICAL]</span> <span class="t-bold">Your original source code is public</span>
-  1 source map file(s) contain the full text of 4 original file(s).
-  Anyone who downloads them reads the code exactly as you wrote it.
-  - dist/index.js.map (originals: ../../../src/pricing.ts, ../../../src/license.ts, ../../../src/client.ts, ../../../src/index.ts)
-  Fix: reaproof fix (takes the map files out of the output; can be undone)
-
-<span class="t-dim">⋯</span>
-
-<span class="t-bold">What to do next:</span>
-  1. Fix the findings above from the top: the most damaging come first.
-  2. Then rebuild and run npx reaproof again. A finding that is gone is fixed.
-  3. After deploying, check the live site too: npx reaproof https://your-site
-
-1 map file(s) will be taken out of the output:
-  - dist/index.js.map
-Continue? (y/N) y
-Done: 1 taken out.
-rea risk: <span class="t-red t-bold">very high</span> → <span class="t-green t-bold">baseline</span>
-Leaks found: 1 kind (critical 1) → none
-Kept at: /tmp/reaproof-demo/backups/shop-web-48f3456db025/2026-10-15T16-20-49-622Z
-Undo: reaproof undo</pre>
-          <figcaption>A real run on our web test app, recorded in a terminal. Lines left out are marked ⋯; the <a href="https://github.com/Junhan2/reaproof#how-it-works">whole output</a> is in the guide.</figcaption>
+        <figure class="demo" data-demo aria-labelledby="demo-caption">
+          <div class="demo-stage">
+            <div class="terminal demo-terminal">
+              <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span><p>npx reaproof</p></div>
+              <div class="demo-scroll" tabindex="0" role="region" aria-label="The recorded run">
+<pre><span class="demo-line" data-beat="1"><span class="t-dim">$ </span><span class="demo-typed">npx reaproof</span></span><span class="demo-line" data-beat="1">Checking. This only reads; nothing is changed.</span><span class="demo-line" data-beat="1">Target: dist (output folders picked by name, next to package.json)</span><span class="demo-line" data-beat="1">Files read: 3</span><span class="demo-line" data-beat="1"></span><span class="demo-line" data-beat="1">rea risk: <span class="t-red t-bold">very high</span></span><span class="demo-line" data-beat="1">  Levels: <span class="t-red t-bold">[very high]</span> · <span class="t-dim">high</span> · <span class="t-dim">moderate</span> · <span class="t-dim">baseline</span></span><span class="demo-line" data-beat="1">  A tool like rea can take your original source or your secret values as they are.</span><span class="demo-line" data-beat="1">Leaks found: 1 kind (critical 1)</span><span class="demo-line" data-beat="1"></span><span class="demo-line" data-beat="1"><span class="t-red t-bold">[CRITICAL]</span> <span class="t-bold">Your original source code is public</span></span><span class="demo-line" data-beat="1">  1 source map file(s) contain the full text of 4 original file(s).</span><span class="demo-line" data-beat="1">  Anyone who downloads them reads the code exactly as you wrote it.</span><span class="demo-line" data-beat="1">  - dist/index.js.map (originals: ../../../src/pricing.ts, ../../../src/license.ts, ../../../src/client.ts, ../../../src/index.ts)</span><span class="demo-line" data-beat="1">  Fix: reaproof fix (takes the map files out of the output; can be undone)</span><span class="demo-line" data-beat="1"><span class="t-dim">⋯</span></span><span class="demo-line" data-beat="1"><span class="t-bold">What to do next:</span></span><span class="demo-line" data-beat="1">  1. Fix the findings above from the top: the most damaging come first.</span><span class="demo-line" data-beat="1">  2. Then rebuild and run npx reaproof again. A finding that is gone is fixed.</span><span class="demo-line" data-beat="1">  3. After deploying, check the live site too: npx reaproof https://your-site</span><span class="demo-line" data-beat="1"></span><span class="demo-line" data-beat="1">Report page: file:///home/node/.reaproof/pages/shop-web-9e7dd8976d3e.html (opened in your browser)</span><span class="demo-line" data-beat="1"></span><span class="demo-line" data-beat="2">1 map file(s) will be taken out of the output:</span><span class="demo-line" data-beat="2">  - dist/index.js.map</span><span class="demo-line" data-beat="2">Continue? (y/N) <span class="demo-answer">y</span></span><span class="demo-line" data-beat="3">Done: 1 taken out.</span><span class="demo-line" data-beat="3">rea risk: <span class="t-red t-bold">very high</span> → <span class="t-green t-bold">baseline</span></span><span class="demo-line" data-beat="3">Leaks found: 1 kind (critical 1) → none</span><span class="demo-line" data-beat="3">Kept at: /home/node/.reaproof/backups/shop-web-9e7dd8976d3e/2026-10-18T09-27-36-271Z</span><span class="demo-line" data-beat="3">Undo: reaproof undo</span><span class="demo-line" data-beat="3"><span class="t-dim">⋯</span></span><span class="demo-line" data-beat="3">Report page: file:///home/node/.reaproof/pages/shop-web-9e7dd8976d3e.html (opened in your browser)</span></pre>
+              </div>
+            </div>
+            <div class="demo-browser" aria-hidden="true">
+              <div class="terminal-bar"><span></span><span></span><span></span><p>Report page</p></div>
+              <div class="demo-view">
+                <iframe class="demo-page demo-before" src="demo/report-before.html" title="The report page before the fix" tabindex="-1"></iframe>
+                <iframe class="demo-page demo-after" src="demo/report-after.html" title="The report page after the fix" tabindex="-1"></iframe>
+              </div>
+            </div>
+          </div>
+          <ol class="demo-steps">
+            <li data-step="1">Run it where you build</li>
+            <li data-step="2">The report page opens</li>
+            <li data-step="3">Say yes to the fix</li>
+            <li data-step="4">See the page again</li>
+          </ol>
+          <figcaption id="demo-caption">A real run on our web test app: the terminal as it was recorded, and the report page it wrote, before and after the fix. Lines left out are marked ⋯. Open the page <a href="demo/report-before.html">before</a> and <a href="demo/report-after.html">after</a> the fix. <button class="demo-replay" type="button">Play again</button></figcaption>
         </figure>
       </div>
     </div>
@@ -124,7 +114,7 @@ Undo: reaproof undo</pre>
         <li class="step">
           <span class="step-n" aria-hidden="true">2</span>
           <h3>Read the rating</h3>
-          <p>The report opens with the rea risk, then every finding, worst first, with what it exposes and how to close it. It also says what it did not read.</p>
+          <p>The report opens with the rea risk, then every finding, worst first, with what it exposes and how to close it. It also says what it did not read, and opens the same result as a page in your browser.</p>
         </li>
         <li class="step">
           <span class="step-n" aria-hidden="true">3</span>
@@ -324,7 +314,7 @@ Undo: reaproof undo</pre>
         <article class="use">
           <h3>Before you ship</h3>
           <div class="code"><code>npx reaproof</code><button class="copy copy-small" type="button" data-copy="npx reaproof">Copy</button></div>
-          <p>Run it in your project folder. If nothing is built yet, it offers to run your build first. The first time, <code>npx</code> asks <code>Ok to proceed? (y)</code>: answer <kbd>y</kbd>.</p>
+          <p>Run it in your project folder. The result opens as a page in your browser. If nothing is built yet, it offers to run your build first. The first time, <code>npx</code> asks <code>Ok to proceed? (y)</code>: answer <kbd>y</kbd>.</p>
         </article>
         <article class="use">
           <h3>With your AI agent</h3>
