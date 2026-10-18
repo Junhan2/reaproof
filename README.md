@@ -489,7 +489,7 @@ No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files a
 
 The picture at the top is a run recorded in a real terminal with `docs/tools/capture.py` and drawn with `docs/tools/render-svg.mjs`. Each script says at its top how it is run.
 
-The website is the static page in `site/`, published to GitHub Pages by `.github/workflows/pages.yml` when it changes on main. Its first screen replays the lines of `docs/report.svg` beside the two report pages that same run wrote, kept in `site/demo/`, so record the run once and draw all of them again together.
+The website is the static page in `site/`, published to GitHub Pages by `.github/workflows/pages.yml` when it changes on main. Its first screen replays the lines of `docs/report.svg` beside the two report pages that same run wrote, kept in `site/demo/`, so record the run once and draw all of them again together. Its download count is npm's own, written into the copy that is published by `docs/tools/site-downloads.mjs`; the workflow also runs once a day to bring it up to date, and the page in the repository keeps that line hidden.
 
 ## License
 
