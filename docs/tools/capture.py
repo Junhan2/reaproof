@@ -9,6 +9,7 @@ the script then ends with 1.
 import fcntl
 import os
 import pty
+import re
 import select
 import signal
 import struct
@@ -19,6 +20,8 @@ out_path, columns, answers_arg = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 command = sys.argv[sys.argv.index('--') + 1:]
 answers = [answer.encode() for answer in answers_arg.split(',') if answer]
 QUIET_SECONDS = 60
+# A question can arrive with the codes that move the cursor after it, so they are left out when looking.
+CURSOR_CODES = re.compile(rb'\x1b\[[0-9;?]*[A-Za-z]')
 
 pid, fd = pty.fork()
 if pid == 0:
@@ -26,6 +29,7 @@ if pid == 0:
     os.execvp(command[0], command)
 
 shown = b''
+answered = 0
 was_stopped = False
 while True:
     ready, _, _ = select.select([fd], [], [], QUIET_SECONDS)
@@ -42,7 +46,9 @@ while True:
     if not data:
         break
     shown += data
-    if shown.rstrip().endswith(b'(y/N)'):
+    asked = shown.count(b'(y/N)')
+    if asked > answered and CURSOR_CODES.sub(b'', shown).rstrip().endswith(b'(y/N)'):
+        answered = asked
         os.write(fd, (answers.pop(0) if answers else b'') + b'\n')
 _, status = os.waitpid(pid, 0)
 with open(out_path, 'wb') as out:

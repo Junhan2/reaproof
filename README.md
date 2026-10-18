@@ -1,6 +1,6 @@
 <div align="center">
 
-<sub><b>New in 0.8.0:</b> SvelteKit, Astro, Nuxt and React Router builds checked for what reaches browsers, Gemini keys, and your CI job's secrets compared with what ships. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.8.0">Release notes</a></sub>
+<sub><b>New in 0.9.0:</b> each result opens as a page in your browser, and a fix shows the rating before and after. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.9.0">Release notes</a></sub>
 
 # Reaproof
 
@@ -10,7 +10,7 @@
 
 **[Website](https://junhan2.github.io/reaproof/)** · [How it works](#how-it-works) · [Benchmarks](#benchmarks) · [What it checks](#what-it-checks) · [CI](#ready-for-ci) · [Get started](#get-started)
 
-<img src="https://raw.githubusercontent.com/Junhan2/reaproof/main/docs/report.svg" width="808" alt="A terminal running npx reaproof on a web app: rea risk very high, because a source map holds the original source of four files; the map is taken out after a yes, and rea risk falls to baseline">
+<img src="https://raw.githubusercontent.com/Junhan2/reaproof/main/docs/report.svg" width="808" alt="A terminal running npx reaproof on a web app: rea risk very high, because a source map holds the original source of four files; the report page opens in a browser; the map is taken out after a yes, rea risk falls to baseline, and the page opens again">
 
 <sub>A real run on the web test app from <a href="#what-the-fixes-change-measured">What the fixes change, measured</a>. Lines left out are marked ⋯; the whole output is under <a href="#how-it-works">How it works</a>.</sub>
 
@@ -83,18 +83,22 @@ What to do next:
   2. Then rebuild and run npx reaproof again. A finding that is gone is fixed.
   3. After deploying, check the live site too: npx reaproof https://your-site
 
+Report page: file:///home/node/.reaproof/pages/shop-web-9e7dd8976d3e.html (opened in your browser)
+
 1 map file(s) will be taken out of the output:
   - dist/index.js.map
 Continue? (y/N) y
 Done: 1 taken out.
 rea risk: very high → baseline
 Leaks found: 1 kind (critical 1) → none
-Kept at: /tmp/reaproof-demo/backups/shop-web-48f3456db025/2026-10-15T16-20-49-622Z
+Kept at: /home/node/.reaproof/backups/shop-web-9e7dd8976d3e/2026-10-18T09-27-36-271Z
 Undo: reaproof undo
 
 To keep them from coming back on the next build:
   Turn off production source maps in your build tool settings.
   If an error tracker needs the maps, upload them there and then delete them from the output.
+
+Report page: file:///home/node/.reaproof/pages/shop-web-9e7dd8976d3e.html (opened in your browser)
 ```
 
 </details>
@@ -485,7 +489,7 @@ No dependencies. Node.js 18.3 or later. The tests write their own Mach-O files a
 
 The picture at the top is a run recorded in a real terminal with `docs/tools/capture.py` and drawn with `docs/tools/render-svg.mjs`. Each script says at its top how it is run.
 
-The website is the static page in `site/`, published to GitHub Pages by `.github/workflows/pages.yml` when it changes on main. Its first screen repeats the lines of `docs/report.svg`, so record and draw both again together.
+The website is the static page in `site/`, published to GitHub Pages by `.github/workflows/pages.yml` when it changes on main. Its first screen replays the lines of `docs/report.svg` beside the two report pages that same run wrote, kept in `site/demo/`, so record the run once and draw all of them again together.
 
 ## License
 

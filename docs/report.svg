@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="808" height="655" viewBox="0 0 808 655" role="img" aria-label="npx reaproof">
-  <rect x="0.5" y="0.5" width="807" height="654" rx="10" fill="#0f1419" stroke="#2a3038"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="808" height="731" viewBox="0 0 808 731" role="img" aria-label="npx reaproof">
+  <rect x="0.5" y="0.5" width="807" height="730" rx="10" fill="#0f1419" stroke="#2a3038"/>
   <circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
   <text x="404" y="22" text-anchor="middle" fill="#7d8590" font-family="ui-sans-serif, -apple-system, 'Segoe UI', sans-serif" font-size="12">npx reaproof</text>
   <g font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13">
@@ -16,18 +16,23 @@
   <text x="20" y="290" textLength="768.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  - dist/index.js.map (originals: ../../../src/pricing.ts, ../../../src/license.ts, ../../../src</tspan></text>
   <text x="20" y="309" textLength="272.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">/client.ts, ../../../src/index.ts)</tspan></text>
   <text x="20" y="328" textLength="592.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  Fix: reaproof fix (takes the map files out of the output; can be undone)</tspan></text>
-  <text x="20" y="366" textLength="8.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#7d8590">⋯</tspan></text>
-  <text x="20" y="404" textLength="128.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3" font-weight="700">What to do next:</tspan></text>
-  <text x="20" y="423" textLength="568.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  1. Fix the findings above from the top: the most damaging come first.</tspan></text>
-  <text x="20" y="442" textLength="624.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  2. Then rebuild and run npx reaproof again. A finding that is gone is fixed.</tspan></text>
-  <text x="20" y="461" textLength="616.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  3. After deploying, check the live site too: npx reaproof https://your-site</tspan></text>
-  <text x="20" y="499" textLength="368.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">1 map file(s) will be taken out of the output:</tspan></text>
-  <text x="20" y="518" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  - dist/index.js.map</tspan></text>
-  <text x="20" y="537" textLength="136.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Continue? (y/N) </tspan><tspan fill="#e6edf3">y</tspan></text>
-  <text x="20" y="556" textLength="144.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Done: 1 taken out.</tspan></text>
-  <text x="20" y="575" textLength="240.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">rea risk: </tspan><tspan fill="#ff7b72" font-weight="700">very high</tspan><tspan fill="#e6edf3"> → </tspan><tspan fill="#3fb950" font-weight="700">baseline</tspan></text>
-  <text x="20" y="594" textLength="312.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Leaks found: 1 kind (critical 1) → none</tspan></text>
-  <text x="20" y="613" textLength="656.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Kept at: /tmp/reaproof-demo/backups/shop-web-48f3456db025/2026-10-15T16-20-49-622Z</tspan></text>
-  <text x="20" y="632" textLength="152.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Undo: reaproof undo</tspan></text>
+  <text x="20" y="347" textLength="8.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#7d8590">⋯</tspan></text>
+  <text x="20" y="366" textLength="128.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3" font-weight="700">What to do next:</tspan></text>
+  <text x="20" y="385" textLength="568.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  1. Fix the findings above from the top: the most damaging come first.</tspan></text>
+  <text x="20" y="404" textLength="624.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  2. Then rebuild and run npx reaproof again. A finding that is gone is fixed.</tspan></text>
+  <text x="20" y="423" textLength="616.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  3. After deploying, check the live site too: npx reaproof https://your-site</tspan></text>
+  <text x="20" y="461" textLength="768.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Report page: file:///home/node/.reaproof/pages/shop-web-9e7dd8976d3e.html (opened in your browse</tspan></text>
+  <text x="20" y="480" textLength="16.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">r)</tspan></text>
+  <text x="20" y="518" textLength="368.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">1 map file(s) will be taken out of the output:</tspan></text>
+  <text x="20" y="537" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">  - dist/index.js.map</tspan></text>
+  <text x="20" y="556" textLength="136.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Continue? (y/N) </tspan><tspan fill="#e6edf3">y</tspan></text>
+  <text x="20" y="575" textLength="144.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Done: 1 taken out.</tspan></text>
+  <text x="20" y="594" textLength="240.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">rea risk: </tspan><tspan fill="#ff7b72" font-weight="700">very high</tspan><tspan fill="#e6edf3"> → </tspan><tspan fill="#3fb950" font-weight="700">baseline</tspan></text>
+  <text x="20" y="613" textLength="312.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Leaks found: 1 kind (critical 1) → none</tspan></text>
+  <text x="20" y="632" textLength="672.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Kept at: /home/node/.reaproof/backups/shop-web-9e7dd8976d3e/2026-10-18T09-27-36-271Z</tspan></text>
+  <text x="20" y="651" textLength="152.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Undo: reaproof undo</tspan></text>
+  <text x="20" y="670" textLength="8.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#7d8590">⋯</tspan></text>
+  <text x="20" y="689" textLength="768.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">Report page: file:///home/node/.reaproof/pages/shop-web-9e7dd8976d3e.html (opened in your browse</tspan></text>
+  <text x="20" y="708" textLength="16.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"><tspan fill="#e6edf3">r)</tspan></text>
   </g>
 </svg>
