@@ -1084,6 +1084,15 @@ tbody tr:last-child td {
   text-align: right;
 }
 
+/* Two columns of numbers beside a label fit a phone: the label wraps instead. */
+.versus {
+  min-width: 0;
+}
+
+.versus th:first-child {
+  white-space: normal;
+}
+
 .ok {
   color: var(--baseline);
   font-weight: 500;

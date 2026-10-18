@@ -1,6 +1,6 @@
 <div align="center">
 
-<sub><b>New in 0.7.0:</b> Android apps, Windows and Linux programs, and SARIF for GitHub code scanning. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.7.0">Release notes</a></sub>
+<sub><b>New in 0.8.0:</b> SvelteKit, Astro, Nuxt and React Router builds checked for what reaches browsers, Gemini keys, and your CI job's secrets compared with what ships. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.8.0">Release notes</a></sub>
 
 # Reaproof
 
@@ -101,7 +101,7 @@ To keep them from coming back on the next build:
 
 ## In numbers
 
-| 1 | 0 | 60 | 13 |
+| 1 | 0 | 61 | 13 |
 | :---: | :---: | :---: | :---: |
 | command to start: `npx reaproof` | dependencies, and nothing to configure | patterns for server keys, from Stripe and AWS to xAI and Supabase | test setups for every change: Node 18 to 24 on Linux, macOS and Windows |
 
@@ -118,7 +118,7 @@ Four TypeScript files bundled with Bun 1.2.19, measured with rea 6.4.0 on 2026-1
 
 ### Right answers on framework builds
 
-| 22 test apps, six frameworks | 0.7.0 | Now |
+| 22 test apps, six frameworks | 0.7.0 | 0.8.0 |
 | --- | ---: | ---: |
 | Leaks found, of 14 put in, with the `.env` file there (your machine) | 13 | 14 |
 | The same, with the values in the environment instead (a CI job) | 11 | 14 |
@@ -149,12 +149,12 @@ Built on 2026-10-18 in Docker with Next.js 16.4.2, Vite 8.3.4 with React 19.3.1,
 | --- | ---: | ---: | ---: |
 | Our web test app | 6.3 kB | 3 | 0.04 s |
 | Our Vite build with eight SDKs | 1.8 MB | 3 | 0.05 s |
-| ripgrep 15.2.0 for Windows, `.zip` | 1.8 MB | 14 | 0.06 s |
-| Fossify Gallery 1.14.0, `.apk` | 38.5 MB | 1,606 | 0.18 s |
-| Joplin 3.7.10, `.apk` | 177.1 MB | 1,162 | 0.59 s |
-| Electron Fiddle 0.39.0 for macOS, `.zip` | 117.8 MB | 366 | 1.30 s |
+| ripgrep 15.2.0 for Windows, `.zip` | 1.8 MB | 14 | 0.07 s |
+| Fossify Gallery 1.14.0, `.apk` | 38.5 MB | 1,606 | 0.19 s |
+| Joplin 3.7.10, `.apk` | 177.1 MB | 1,162 | 0.63 s |
+| Electron Fiddle 0.39.0 for macOS, `.zip` | 117.8 MB | 366 | 1.32 s |
 
-Median of three runs of `reaproof <target> --json` on 2026-10-17, on an Apple M4 Pro with Node 24.14.0, Node's own start included. Size is the file or folder on disk.
+Median of three runs of `reaproof <target> --json` with 0.8.0 on 2026-10-18, on an Apple M4 Pro with Node 24.14.0, Node's own start included, in a shell with two variables named like a secret, which it compares with what ships. Size is the file or folder on disk.
 
 ### Safe on archives built to cost you
 
@@ -203,7 +203,7 @@ Each is told by the prefix the service issues its keys with, as the service docu
 
 For the `.env` comparison, Reaproof reads the `.env` files of the project the path belongs to: the nearest folder, the path itself or one above it, that holds a `package.json` or another project file such as `Package.swift` or `Cargo.toml`. The search stops short of your home folder, so a `package.json` left there does not make everything under it one project. The values are compared and never printed. Variables with a prefix their framework documents as public (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`, `NUXT_PUBLIC_`, `GATSBY_`, `VUE_APP_`, `STORYBOOK_`) are expected in the output, unless the name itself says `SECRET`, `PRIVATE`, `PASSWORD` or `SERVICE_ROLE`. So are those SvelteKit 3 declares `public: true` in `src/env.js` or `src/env.ts`, where it tells public variables apart instead of by a prefix, those with `PUBLISHABLE` as a part of the name, as `STRIPE_PUBLISHABLE_KEY`, and values in the form Stripe and Supabase issue publishable keys in (`pk_live_`, `pk_test_`, `sb_publishable_`), whatever they are called, with the same exception. A name with `PUBLIC` in it says nothing by itself: Railway puts the outside address of a database, password and all, into `DATABASE_PUBLIC_URL`.
 
-The environment Reaproof runs in is compared the same way, for variables named like a secret (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PRIVATE`, `CREDENTIALS`, `DATABASE_URL`, `CONNECTION_STRING`, `SERVICE_ROLE` as a part of the name), for a database or queue address that carries a password, whatever it is called, and for those named as public, which say what is published on purpose. A CI job or a hosting platform has the build's values there and not in a file, so a check run in the same job after the build sees them. The other variables are the machine's own, and a build writes some into its output on purpose, as a commit hash. A value from the environment is reported as from `environment`, by variable name only.
+The environment Reaproof runs in is compared the same way, for variables named like a secret (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PRIVATE`, `CREDENTIALS`, `DATABASE_URL`, `CONNECTION_STRING`, `SERVICE_ROLE` as a part of the name), for a database or queue address that carries a password, whatever it is called, and for those named as public, which say what is published on purpose. A CI job or a hosting platform has the build's values there and not in a file, so a check run in the same job after the build sees them. The other variables are the machine's own, and a build writes some into its output on purpose, as a commit hash. A value from the environment is reported as from `environment`, by variable name only. Each value compared is one more search through what ships: the 177 MB Joplin 3.7.10 APK took 0.56 s with no such variable and 1.16 s with 20.
 
 ## Three ways to use it
 
