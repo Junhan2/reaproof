@@ -101,7 +101,8 @@ export function undoLastFix(root) {
 
 /** Where Reaproof keeps what it writes, outside every project: backups and report pages. */
 export function reaproofHome() {
-  return process.env.REAPROOF_HOME ?? join(homedir(), '.reaproof');
+  // An empty REAPROOF_HOME counts as unset, so nothing is written under the current folder.
+  return process.env.REAPROOF_HOME || join(homedir(), '.reaproof');
 }
 
 /** A name of its own for each checked path: its last part and a hash of the whole of it. */
