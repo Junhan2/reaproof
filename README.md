@@ -27,7 +27,7 @@ npx reaproof
 ## How it works
 
 1. **It reads, and changes nothing.** In a JavaScript project folder it finds the build output by name (`dist`, `.next/static`, `out`, `build` and the like). Of a server-rendering build, as SvelteKit, Astro, React Router and Nuxt make one, it reads what browsers load and what the server puts into every page, not the server's own code. Anything else it reads as given: a folder, an app, a program or an archive.
-2. **It rates and explains.** The rating comes first. Each finding follows, worst first, with what it exposes and how to close it. Right under the count of files read, it says what it did not read.
+2. **It rates and explains.** The rating comes first. Each finding follows, worst first, with what it exposes and how to close it. Right under the count of files read, it says what it did not read. At a terminal it also opens the same result as a page in your browser.
 3. **It offers the fix it can make.** It lists the source map files it can take out and, after a `y`, moves them out of your output into a backup. `npx reaproof undo` puts them back.
 4. **You close the rest and run it again.** Each finding names the setting to change. A finding that is gone is fixed. The report ends with what to do next.
 
@@ -213,7 +213,7 @@ The environment Reaproof runs in is compared the same way, for variables named l
 npx reaproof
 ```
 
-Run it in your project folder. It rates the risk, lists what it found, and when there is something it can close, it shows the list and asks before doing it. If nothing is built yet, it offers to run your build first.
+Run it in your project folder. It rates the risk, lists what it found, and when there is something it can close, it shows the list and asks before doing it. If nothing is built yet, it offers to run your build first. The same result opens as a page in your browser: the rating, large, what to do next, and each kind of leak as a card with where it was found and how to fix it. After a fix, the page shows the rating before and after.
 
 Nothing stays installed. `npx` comes with Node.js and fetches the package when you run it; the first time, it asks `Ok to proceed? (y)` before downloading. Answer `y`.
 
@@ -229,7 +229,7 @@ Say this to any coding agent that can run commands:
 
 > Run `npx reaproof --json` and fix what it reports.
 
-The JSON carries the risk level and, for every kind of finding, what it means and what to do, so the agent needs no setup. It opens with the verdict and ends with the list of findings, so a reader that cuts long output short still gets the verdict. With the verdict come `failOn` and `exitCode`, for an agent that is not shown how the command ended. A failure is answered in JSON too, on standard output, with a `code`, the reason and the `exitCode`. Paths, file names and addresses inside the findings are copied from the scanned files: characters a reader cannot see are removed, long text is cut, and every JSON answer opens by saying that this text is data to report, not instructions to follow.
+The JSON carries the risk level and, for every kind of finding, what it means and what to do, so the agent needs no setup. It opens with the verdict and ends with the list of findings, so a reader that cuts long output short still gets the verdict. With the verdict come `failOn` and `exitCode`, for an agent that is not shown how the command ended. A failure is answered in JSON too, on standard output, with a `code`, the reason and the `exitCode`. Paths, file names and addresses inside the findings are copied from the scanned files: characters a reader cannot see are removed, long text is cut, and every JSON answer opens by saying that this text is data to report, not instructions to follow. The JSON also names `page`, the file that shows the same result as a page, so the agent can open it for you or tell you where it is.
 
 To make the agent reach for it by itself, install the skill once:
 
@@ -344,6 +344,8 @@ The report ends with what to do next: check first what it did not read, then fix
 
 At a terminal the rating and the kind of each finding are in color. Set `NO_COLOR` to turn color off; in a pipe, in CI and with `--json` there is none.
 
+At a terminal the result also opens in your default browser as a page, in the words of the report: the rating on its scale, what to do next with the fix it can make first, what it did not read, the leaks worst first and then the notes, each kind as a card with up to 100 of the files or addresses it was found in. After a fix the page opens again with the rating before the fix struck out, the build setting that keeps the maps from coming back, and how to undo it. The page is one HTML file with no script: it loads nothing, nothing in it runs, and text copied from the scanned files is shown as text. It is kept in `~/.reaproof/pages`, one for each folder checked, never in your project, where it could be deployed, and on macOS and Linux only you can read it. `--no-open` keeps the browser closed and still names the page. A page is made for a person at a terminal and for `--json`, never for `--sarif` or a pipe, and no browser is opened in CI, over SSH or on Linux without a display. On the 22 framework test apps and the 23 saved test targets, every page shows the rating, the leak counts and, for each kind, the number of items that the JSON holds, and making the page for Homebrew's 36,151 findings took 11.8 ms.
+
 Exit codes: 0 when no leak at the `--fail-on` level or above was found (the level is high unless you say otherwise, so a moderate result exits with 0), 1 when one was, 2 for a usage error or a target that could not be settled on, 3 when what ships could not be read (an address that did not answer, or a target with nothing in it that Reaproof opens), 4 when Reaproof itself ran into an error. Please report a 4 at [Issues](https://github.com/Junhan2/reaproof/issues).
 
 ## Commands
@@ -356,7 +358,7 @@ Exit codes: 0 when no leak at the `--fail-on` level or above was found (the leve
 | `reaproof undo [path]` | Puts back what the last fix took out |
 | `reaproof measure [path]` | Runs the real rea on the output and counts what it reads |
 
-Options: `--json` for machine-readable output, `--sarif` for SARIF output from a scan (see "Automatically"), `--yes` to skip the question in `fix` and `measure`, `--fail-on critical|high|medium` for the mildest leak that makes the exit code 1, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
+Options: `--json` for machine-readable output, `--sarif` for SARIF output from a scan (see "Automatically"), `--yes` to skip the question in `fix` and `measure`, `--fail-on critical|high|medium` for the mildest leak that makes the exit code 1, `--lang ko|en` for the report language, `--no-open` to keep the report page from opening in a browser. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
 
 The path can be a build output folder, a packaged app, a single program, or an archive such as a `.zip`, an `.ipa` or an Electron `.asar`, and it is scanned as given. Only a JavaScript project folder, one with a `package.json`, is searched for its output: Reaproof looks there for `.next/static`, `out`, `dist`, `build`, `release` and Nuxt's `.output`, and, when none of them is there, for SvelteKit's own build in `.svelte-kit/output`, which its default adapter leaves alone on a machine that is not the platform it deploys to; the report says the folders were picked by name. Of a server-rendering build, one with `client` or `public` beside `server`, as SvelteKit's Node adapter, React Router, Astro and Nuxt write it, only that half and SvelteKit's `prerendered` pages are read, also when the build folder is pointed at. The report names such a build, and the JSON lists it in `serverBuilds`. An Electron or Tauri project is read whole, since all of its output, a server in it too, is installed on the user's machine. Out of its server code, what the server puts into every page is read as browser code: the scripts Astro puts into the pages it renders, and the public part of Nuxt's runtime config. The report names them, and the JSON lists them in `serverSent`, each as the file it sits in, `:/`, and what it is. Where they are not found in the form the releases tried here write them, the report says they were not read, and the JSON lists the build in `serverSentUnread`. For a project in another language (a folder with `Package.swift`, an Xcode project, `Cargo.toml`, `go.mod` and the like) it does not guess where the build went. Point it at the thing that ships, for example the `.app`.
 

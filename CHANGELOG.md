@@ -2,6 +2,12 @@
 
 What changed in each release published to npm, newest first.
 
+## Unreleased (not published yet)
+
+- Opens the result as a page in your browser when you run it at a terminal, for whoever a terminal report says little to: the rating large on its scale, what to do next with the fix it can make first, then each kind of leak as a card with where it was found and how to fix it, in the words the terminal uses. After `fix`, the page opens again with the rating before the fix struck out, the build setting that keeps maps away, and how to undo it. On 45 test targets every page shows the rating, the leak counts and the items of each kind that the JSON holds.
+- The page is one HTML file with no script and nothing to load, so text copied from a scanned file is shown as text and nothing in it runs. It is kept in `~/.reaproof/pages`, never in the project, and no browser is opened in CI, over SSH or on Linux without a display. `--no-open` keeps the browser closed.
+- With `--json`, the result names its page in `page`, so an agent can show it to you. The text a pipe gets and the rest of the JSON are as they were.
+
 ## 0.8.0 (2026-10-18)
 
 - Reads only what browsers load of a server-rendering build: the `client` or `public` half beside `server`, with SvelteKit's `prerendered` pages, as SvelteKit's Node adapter, React Router, Astro and Nuxt write a build, picked by name or pointed at. On 22 test apps built with Next.js 16.4.2, Vite 8.3.4, SvelteKit 3.1.0, Nuxt 4.6.2, Astro 7.4.0 and React Router 8.4.0, 0.7.0 rated 4 of the 8 apps built right with a leak, from keys, an AI prompt and code that stay on the server; now none of them. The report names such builds, and the JSON lists them in `serverBuilds`. An Electron or Tauri project is still read whole: an app installs all of its output, a server in it too.

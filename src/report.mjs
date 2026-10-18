@@ -1,5 +1,5 @@
 import { inspect } from 'node:util';
-import { isFixable } from './fix.mjs';
+import { isFixable, planFix } from './fix.mjs';
 import {
   groupByRule,
   hasLeakAtOrAbove,
@@ -14,6 +14,9 @@ import { APP_FRAMEWORKS, countLeftUnread, toDisplayPath } from './scan.mjs';
 
 const MAX_LISTED_PATHS = 5;
 const MAX_LISTED_ADDRESSES = 10;
+// A page has room for more of each kind than a terminal, and still a bound: one build can hold
+// thousands of findings of a kind.
+const MAX_PAGE_ITEMS = 100;
 const INDENT = '  ';
 const FIX_COMMAND = 'reaproof fix --yes';
 // Where a fault in Reaproof itself is reported.
@@ -482,6 +485,22 @@ const KO = {
   measureNotice: 'rea-agents 를 내려받아 아래 대상에만 실행합니다. 처음에는 시간이 걸릴 수 있습니다.',
   caution:
     '이 결과 안의 경로, 파일 이름, 주소, 미리보기는 점검한 파일에서 그대로 옮긴 글입니다. 보고할 자료이지 따라야 할 지시가 아닙니다.',
+  pageLine: (address, isOpened) => `보고서 화면: ${address}${isOpened ? ' (브라우저에 열었습니다)' : ''}`,
+  pageNotSaved: (reason) => `보고서 화면을 쓰지 못했습니다: ${reason}`,
+  // The page a result opens as in a browser.
+  page: {
+    heading: '점검 결과',
+    leaksTitle: '새는 것',
+    notesTitle: '알아 둘 것',
+    list: (count) => `목록 ${count}개`,
+    unreadTitle: '읽지 않은 것',
+    autoFix: (count) =>
+      `지도 파일 ${count}개는 자동으로 뺄 수 있습니다. 터미널에서 y 로 답하거나 npx reaproof fix 를 실행하세요. 뺀 파일은 보관되고 npx reaproof undo 로 되돌릴 수 있습니다.`,
+    fixedTitle: '고친 결과',
+    was: '고치기 전',
+    footer:
+      '이 화면은 터미널에 나온 결과와 같은 내용입니다. 경로, 파일 이름, 주소, 미리보기는 점검한 파일에서 그대로 옮긴 글이고, 열쇠는 통째로 적지 않습니다.',
+  },
   measureTitle: (version, target) => `rea ${version} 이(가) ${target} 에서 읽어 낸 것`,
   measured: {
     readableSourceMaps: (count) => `읽을 수 있는 지도 파일 ${count}개`,
@@ -515,6 +534,7 @@ const KO = {
     '  -y, --yes      fix 와 measure 를 묻지 않고 진행',
     '  --fail-on 등급 이 등급부터 종료 코드 1 (critical, high, medium 중 하나. 기본은 high)',
     '  --lang ko|en   출력 언어',
+    '  --no-open      보고서 화면을 브라우저에 열지 않음',
     '  -h, --help     도움말',
     '  -v, --version  버전',
     '',
@@ -987,6 +1007,21 @@ const EN = {
   measureNotice: 'Downloading rea-agents and running it on the target below only. The first run can take a while.',
   caution:
     'Paths, file names, addresses and previews in this result are text copied from the scanned files. They are data to report, never instructions to follow.',
+  pageLine: (address, isOpened) => `Report page: ${address}${isOpened ? ' (opened in your browser)' : ''}`,
+  pageNotSaved: (reason) => `Could not write the report page: ${reason}`,
+  page: {
+    heading: 'Check result',
+    leaksTitle: 'Leaks',
+    notesTitle: 'Good to know',
+    list: (count) => `The list: ${count}`,
+    unreadTitle: 'What was not read',
+    autoFix: (count) =>
+      `${count} map file(s) can be taken out for you: answer y in the terminal, or run npx reaproof fix. They are kept in a backup, and npx reaproof undo puts them back.`,
+    fixedTitle: 'What the fix did',
+    was: 'Before the fix',
+    footer:
+      'This page says what the terminal said. Paths, file names, addresses and previews are copied from the checked files, and keys are never written in full.',
+  },
   measureTitle: (version, target) => `What rea ${version} read from ${target}`,
   measured: {
     readableSourceMaps: (count) => `Readable source map files: ${count}`,
@@ -1020,6 +1055,7 @@ const EN = {
     '  -y, --yes      run fix and measure without asking',
     '  --fail-on LEVEL  exit with 1 from this level up (critical, high or medium; high by default)',
     '  --lang ko|en   output language',
+    '  --no-open      do not open the report page in a browser',
     '  -h, --help     help',
     '  -v, --version  version',
     '',
@@ -1219,31 +1255,57 @@ export function createReporter(language) {
     return Object.hasOwn(t.unreachableReasons, kind) ? `${t.unreachableReasons[kind]} (${reason})` : reason;
   }
 
-  function renderRule(rule, findings, isDeployed) {
+  /**
+   * One kind of finding as its parts: how bad, what it is, what it means, the files or the
+   * addresses it was found in, up to `limit` of them, and how to fix it.
+   */
+  function ruleParts(rule, findings, isDeployed, limit) {
     const { addresses, totals } = summarizeRule(findings);
-    const listed =
-      rule === 'endpoint'
-        ? capList(addresses.map((address) => `- ${address}`), MAX_LISTED_ADDRESSES)
-        : capList(findings.map((finding) => `- ${describeFinding(finding)}`), MAX_LISTED_PATHS);
-    const lines = [
-      `${tagOf(worstSeverity(findings))} ${t.rules[rule].title}`,
-      ...indent(t.rules[rule].body(totals)),
-      ...indent(listed),
-    ];
+    const listed = rule === 'endpoint' ? addresses : findings;
+    const hints = [];
     if (STANDALONE_MAP_RULES.has(rule)) {
-      if (findings.some(isFixable)) lines.push(INDENT + t.fixHint);
-      if (!findings.every(isFixable)) lines.push(INDENT + (isDeployed ? t.deployedHint : t.inArchiveHint));
+      if (findings.some(isFixable)) hints.push(t.fixHint);
+      if (!findings.every(isFixable)) hints.push(isDeployed ? t.deployedHint : t.inArchiveHint);
     }
-    return lines;
+    // Only what is listed is put into words.
+    const shown = listed.slice(0, limit);
+    return {
+      rule,
+      severity: worstSeverity(findings),
+      title: t.rules[rule].title,
+      body: t.rules[rule].body(totals),
+      items: rule === 'endpoint' ? shown : shown.map(describeFinding),
+      more: Math.max(0, listed.length - limit),
+      hints,
+    };
   }
 
-  function nextBuildHints(frameworks) {
+  /** A kind of finding as lines of the terminal report: tag and title, what it means, the list, the fix. */
+  function layoutRule({ severity, title, body, items, more, hints }) {
+    const listed = items.map((item) => `- ${item}`);
+    if (more > 0) listed.push(`- ${t.andMore(more)}`);
+    return [`${tagOf(severity)} ${title}`, ...indent(body), ...indent(listed), ...indent(hints)];
+  }
+
+  function nextBuildParts(frameworks) {
     const known = frameworks.map((framework) => t.frameworkHints[framework]).filter(Boolean);
-    return [
-      t.nextBuildTitle,
-      ...indent(known.length > 0 ? known : [t.genericHint]),
-      INDENT + t.errorTrackerHint,
-    ];
+    return { title: t.nextBuildTitle, lines: [...(known.length > 0 ? known : [t.genericHint]), t.errorTrackerHint] };
+  }
+
+  /** What was read: the target, and how many files of how many met. */
+  function describeRead(result) {
+    const targets = result.isDeployed
+      ? result.root
+      : result.targets.map((target) => toDisplayPath(result.root, target)).join(', ');
+    const asides = [];
+    if (result.filesSeen > result.filesScanned) asides.push(t.ofSeen(result.filesSeen));
+    if (result.archivesOpened > 0) asides.push(t.archivesAmong(result.archivesOpened));
+    if (result.programsScanned > 0) asides.push(t.programsAmong(result.programsScanned));
+    const scanned = t.scanned(result.filesScanned);
+    return {
+      target: result.targetsPickedByName ? `${t.target(targets)} ${t.pickedByName}` : t.target(targets),
+      scanned: asides.length > 0 ? `${scanned} (${asides.join(', ')})` : scanned,
+    };
   }
 
   /** Every level, with the result's own in brackets, so that a first reading shows where it stands. */
@@ -1278,6 +1340,62 @@ export function createReporter(language) {
       result.archivesOpened === 0;
     if (isWebsite) steps.push(t.next.checkDeployed);
     return steps;
+  }
+
+  // How many items of a kind each reader is shown: a terminal a few, a page more.
+  const terminalLimit = (rule) => (rule === 'endpoint' ? MAX_LISTED_ADDRESSES : MAX_LISTED_PATHS);
+  const pageLimit = () => MAX_PAGE_ITEMS;
+
+  /**
+   * A result as the parts both the terminal report and the page are made of: the rating, the
+   * way on, what was not read, then the leaks worst first and the notes, each kind with up to
+   * `limitOf(rule)` items. `fixed` is what a fix took out, when the result is what it left.
+   */
+  function compose(result, fixed, limitOf) {
+    const isDeployed = Boolean(result.isDeployed);
+    const isRated = result.risk !== 'unrated';
+    const findingsByRule = groupByRule(result.findings);
+    const rules = rulesWorstFirst(findingsByRule).map((rule) =>
+      ruleParts(rule, findingsByRule.get(rule), isDeployed, limitOf(rule)),
+    );
+    const notMoved = (fixed?.applied.failed ?? []).map(({ path }) => toDisplayPath(fixed.before.root, path));
+    const fixableMaps = fixed ? 0 : planFix(result).length;
+    const limits = listLimits(result);
+    const levelOf = (risk) => ({ level: risk, name: t.riskLevels[risk] });
+    // With nothing read, "none found" would read as "clean". After a fix, the line says what went.
+    let leakLine = isRated ? describeLeaks(result.leaks) : null;
+    if (fixed) leakLine = `${describeLeaks(fixed.before.leaks)}${RISK_ARROW}${describeLeaks(result.leaks)}`;
+    return {
+      language,
+      labels: {
+        ...t.page,
+        nextTitle: t.nextTitle.replace(/:$/, ''),
+        risk: t.riskLabel,
+        leaks: t.leaksLabel,
+        levels: t.levelsLabel,
+        severity: t.severity,
+        andMore: t.andMore,
+      },
+      read: describeRead(result),
+      readNotes: listServerParts(result),
+      unread: listUnread(result),
+      risk: { ...levelOf(result.risk), summary: t.riskSummaries[result.risk] },
+      levels: isRated ? RISK_LEVELS.map(levelOf) : [],
+      leaks: isRated ? result.leaks : null,
+      leakLine,
+      fixed: fixed && {
+        before: levelOf(fixed.before.risk),
+        moved: [t.fixDone(fixed.applied.movedCount), ...(notMoved.length > 0 ? [t.fixFailed(notMoved.length, named(notMoved))] : [])],
+        undo: [t.backupAt(fixed.applied.backupDir), t.undoHint],
+      },
+      autoFix: fixableMaps > 0 ? t.page.autoFix(fixableMaps) : null,
+      leakRules: rules.filter(({ severity }) => severity !== 'info'),
+      noteRules: rules.filter(({ severity }) => severity === 'info'),
+      nextBuild: fixed || result.findings.some(({ rule }) => SOURCE_MAP_RULES.has(rule)) ? nextBuildParts(result.frameworks) : null,
+      limits: limits.length > 0 ? { title: t.limitsTitle, lines: limits } : null,
+      deployedScope: isDeployed ? t.deployedScope : null,
+      nextSteps: nextSteps(result),
+    };
   }
 
   // What a report line opens with says how it is painted at a terminal. Only lines this
@@ -1327,40 +1445,24 @@ export function createReporter(language) {
     },
 
     scan(result) {
-      const isDeployed = Boolean(result.isDeployed);
-      const findingsByRule = groupByRule(result.findings);
-      const targets = isDeployed
-        ? result.root
-        : result.targets.map((target) => toDisplayPath(result.root, target)).join(', ');
-      const asides = [];
-      if (result.filesSeen > result.filesScanned) asides.push(t.ofSeen(result.filesSeen));
-      if (result.archivesOpened > 0) asides.push(t.archivesAmong(result.archivesOpened));
-      if (result.programsScanned > 0) asides.push(t.programsAmong(result.programsScanned));
-      const scanned = t.scanned(result.filesScanned);
+      const view = compose(result, null, terminalLimit);
       const lines = [
-        result.targetsPickedByName ? `${t.target(targets)} ${t.pickedByName}` : t.target(targets),
-        asides.length > 0 ? `${scanned} (${asides.join(', ')})` : scanned,
-        ...indent([...listServerParts(result), ...listUnread(result)]),
+        view.read.target,
+        view.read.scanned,
+        ...indent([...view.readNotes, ...view.unread]),
         '',
-        riskOpening + t.riskLevels[result.risk],
-        ...(result.risk === 'unrated' ? [] : [levelsLine(result.risk)]),
-        INDENT + t.riskSummaries[result.risk],
+        riskOpening + view.risk.name,
+        ...(view.levels.length > 0 ? [levelsLine(view.risk.level)] : []),
+        INDENT + view.risk.summary,
       ];
-      // With nothing read, "none found" would read as "clean".
-      if (result.risk !== 'unrated') lines.push(`${t.leaksLabel}: ${describeLeaks(result.leaks)}`);
+      if (view.leakLine) lines.push(`${t.leaksLabel}: ${view.leakLine}`);
       lines.push('');
-
-      for (const rule of rulesWorstFirst(findingsByRule)) {
-        lines.push(...renderRule(rule, findingsByRule.get(rule), isDeployed), '');
-      }
-      if (result.findings.some(({ rule }) => SOURCE_MAP_RULES.has(rule))) {
-        lines.push(...nextBuildHints(result.frameworks), '');
-      }
-      const limits = listLimits(result);
-      if (limits.length > 0) lines.push(`${tagOf('info')} ${t.limitsTitle}`, ...indent(limits), '');
-      if (isDeployed) lines.push(t.deployedScope);
+      for (const part of [...view.leakRules, ...view.noteRules]) lines.push(...layoutRule(part), '');
+      if (view.nextBuild) lines.push(view.nextBuild.title, ...indent(view.nextBuild.lines), '');
+      if (view.limits) lines.push(`${tagOf('info')} ${view.limits.title}`, ...indent(view.limits.lines), '');
+      if (view.deployedScope) lines.push(view.deployedScope);
       const report = lines.join('\n').trimEnd();
-      const steps = nextSteps(result).map((step, index) => `${index + 1}. ${step}`);
+      const steps = view.nextSteps.map((step, index) => `${index + 1}. ${step}`);
       return steps.length > 0 ? [report, '', t.nextTitle, ...indent(steps)].join('\n') : report;
     },
 
@@ -1370,19 +1472,32 @@ export function createReporter(language) {
     },
 
     fixDone(before, after, applied) {
-      const failed = applied.failed.map(({ path }) => toDisplayPath(before.root, path));
+      const view = compose(after, { before, applied }, terminalLimit);
       return [
-        t.fixDone(applied.movedCount),
-        ...(failed.length > 0 ? [t.fixFailed(failed.length, named(failed))] : []),
-        riskOpening + t.riskLevels[before.risk] + RISK_ARROW + t.riskLevels[after.risk],
-        `${t.leaksLabel}: ${describeLeaks(before.leaks)} → ${describeLeaks(after.leaks)}`,
-        ...listUnread(after),
-        t.backupAt(applied.backupDir),
-        t.undoHint,
+        ...view.fixed.moved,
+        riskOpening + view.fixed.before.name + RISK_ARROW + view.risk.name,
+        `${t.leaksLabel}: ${view.leakLine}`,
+        ...view.unread,
+        ...view.fixed.undo,
         '',
-        ...nextBuildHints(after.frameworks),
+        view.nextBuild.title,
+        ...indent(view.nextBuild.lines),
       ].join('\n');
     },
+
+    /**
+     * What the terminal says of a result, in the parts a page lays out, with room for more
+     * items of each kind.
+     *
+     * @param {{ before: object, applied: { movedCount: number, failed: { path: string }[], backupDir: string } } | null} fixed
+     */
+    sections(result, fixed = null) {
+      return compose(result, fixed, pageLimit);
+    },
+
+    /** The line that says where the page is, and whether a browser was asked to open it. */
+    pageLine: t.pageLine,
+    pageNotSaved: t.pageNotSaved,
 
     undo(outcome) {
       const lines = [t.undoDone(outcome.restored.length)];

@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { applyFix, planFix, undoLastFix } from './fix.mjs';
 import { MeasureError, measureWithRea, REA_PACKAGE } from './measure.mjs';
+import { renderPage } from './page.mjs';
 import { isWebAddress, scanDeployedSite } from './remote.mjs';
 import { createReporter, pickLanguage } from './report.mjs';
 import { toSarif } from './sarif.mjs';
@@ -19,6 +21,8 @@ const OPTIONS = {
   // The mildest leak that still stops a release.
   'fail-on': { type: 'string' },
   lang: { type: 'string' },
+  // The page of the result is still made and named, only not opened in a browser.
+  'no-open': { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
 };
@@ -42,6 +46,8 @@ const EXIT_INTERNAL = 4;
  * @property {((question: string) => Promise<boolean>) | null} ask null when nobody is there to answer
  * @property {(command: string[], directory: string) => boolean} runBuild true when the build succeeded
  * @property {boolean} [color] whether what is printed is shown in a terminal that takes color
+ * @property {(root: string, page: string) => ({ path: string } | { error: string })} [savePage] keeps a result's page outside the project
+ * @property {(path: string) => boolean} [openPage] shows a page in a browser, only ever for a person at a terminal; false when it could not
  */
 
 /**
@@ -163,8 +169,10 @@ async function runScan(target, options, report, terminal) {
     ? await scanDeployedSite(target)
     : await scanOrOfferBuild(resolve(target), ask, report, terminal);
   const ending = endingOf(result, options);
+  const page = writePage(result, null, options, report, terminal);
   if (options.sarif) terminal.print(toVisibleJson(toSarif(result, report, readPackageVersion())));
-  else terminal.print(options.json ? toJson(withExplanation(result, report, ending), report) : report.scan(result));
+  else terminal.print(options.json ? toJson(withExplanation(result, report, ending, page), report) : report.scan(result));
+  showPage(page, options, report, terminal);
 
   // A deployed result plans nothing: none of its findings is a file on disk.
   const mapPaths = planFix(result);
@@ -228,10 +236,36 @@ function takeOutMaps(before, mapPaths, options, report, terminal) {
   // The check has been made already, so an output with nothing left in it is not a failure.
   const exitCode = hasLeakAtOrAbove(after.leaks, options.failOn) ? EXIT_FINDINGS : EXIT_OK;
   const ending = { failOn: options.failOn, exitCode };
+  const page = writePage(after, { before, applied }, options, report, terminal);
   terminal.print(
-    options.json ? toJson({ ...ending, ...applied, before, after }, report) : report.fixDone(before, after, applied),
+    options.json ? toJson({ ...ending, page, ...applied, before, after }, report) : report.fixDone(before, after, applied),
   );
+  showPage(page, options, report, terminal);
   return closeWith(ending, options, report, terminal);
+}
+
+/**
+ * The result as a page, for whoever can look at it: a person at a terminal, who has it opened
+ * in a browser, or an agent asking for JSON, who is told where it is to show it on. None is
+ * made for SARIF, nor for a terminal nobody answers, as a pipe or a CI log is.
+ *
+ * @param {{ before: object, applied: object } | null} fixed what a fix took out, when `result` is what it left
+ * @returns {string | null} where the page was kept
+ */
+function writePage(result, fixed, options, report, terminal) {
+  if (options.sarif || !terminal.savePage || !(options.json || terminal.ask)) return null;
+  const page = renderPage(report.sections(result, fixed), { version: readPackageVersion(), madeAt: new Date() });
+  const saved = terminal.savePage(result.root, page);
+  if (!saved.error) return saved.path;
+  if (!options.json) terminal.printError(report.pageNotSaved(saved.error));
+  return null;
+}
+
+/** Opens the page for a person at a terminal, unless told not to, and says where it is either way. */
+function showPage(path, options, report, terminal) {
+  if (!path || options.json) return;
+  const isOpened = !options['no-open'] && Boolean(terminal.openPage?.(path));
+  terminal.print(`\n${report.pageLine(pathToFileURL(path).href, isOpened)}`);
 }
 
 function runUndo(target, options, report, terminal) {
@@ -280,10 +314,11 @@ async function runMeasure(target, options, report, terminal) {
  * still says the most important thing.
  *
  * @param {{ failOn: string, exitCode: number }} ending
+ * @param {string | null} page where the result's page was kept
  */
-function withExplanation(result, report, ending) {
+function withExplanation(result, report, ending, page) {
   const { risk, leaks, findings, ...facts } = result;
-  return { risk, leaks, ...ending, explain: report.explain(result), ...facts, findings };
+  return { risk, leaks, ...ending, explain: report.explain(result), page, ...facts, findings };
 }
 
 /**

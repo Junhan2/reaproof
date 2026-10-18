@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { main } from '../src/cli.mjs';
+import { openInBrowser, savePage } from '../src/page.mjs';
 
 // Questions are asked only when a person is at both ends of the terminal.
 const isAttended = Boolean(process.stdin.isTTY && process.stdout.isTTY);
@@ -14,6 +15,8 @@ process.exitCode = await main(process.argv.slice(2), {
   printError: (text) => console.error(text),
   color: takesColor,
   ask: isAttended ? askYesOrNo : null,
+  savePage,
+  openPage: openInBrowser,
   runBuild: ([program, ...args], directory) =>
     spawnSync(program, args, { cwd: directory, stdio: 'inherit', shell: process.platform === 'win32' }).status === 0,
 });
