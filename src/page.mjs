@@ -16,6 +16,9 @@ const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&
 const MAX_OPEN_ITEMS = 10;
 // How long a browser is given to say it took the page.
 const OPEN_TIMEOUT_MS = 10_000;
+// How much of a checked path's last part a page's file name keeps before its hash: at four bytes
+// a character it stays under the 255-byte limit of a file name.
+const MAX_NAME_CHARACTERS = 50;
 
 /** Text made safe for the page: nothing unseen stays, and nothing is read as markup. */
 const text = (value) => toPrintable(String(value)).replace(/[&<>"']/g, (character) => ESCAPES[character]);
@@ -141,7 +144,11 @@ ${hints.length > 0 ? `<ul class="hints">${listItems(hints)}</ul>` : ''}
 
 /** Where the page of a checked path is kept: outside the project, one for each path checked. */
 export function pagePath(root) {
-  return join(reaproofHome(), 'pages', `${projectKey(root).replace(/[^\p{L}\p{N}._-]+/gu, '_')}.html`);
+  const key = projectKey(root).replace(/[^\p{L}\p{N}._-]+/gu, '_');
+  // The hash after the last dash keeps the name its own, so only the part before it is cut.
+  const hashAt = key.lastIndexOf('-');
+  const name = [...key.slice(0, hashAt)].slice(0, MAX_NAME_CHARACTERS).join('');
+  return join(reaproofHome(), 'pages', `${name}${key.slice(hashAt)}.html`);
 }
 
 /**
@@ -177,9 +184,12 @@ export function openInBrowser(path, environment = process.env, platform = proces
     } catch {
       return false;
     }
-    // `start` takes its first quoted word for a window title, so an empty one goes first.
+    // The shell goes by its full path: a bare `cmd` is looked for in the current folder first,
+    // and that is the folder being checked. `start` takes its first quoted word for a window
+    // title, so an empty one goes first.
+    const shell = environment.ComSpec || `${environment.SystemRoot || 'C:\\Windows'}\\System32\\cmd.exe`;
     const options = { stdio: 'ignore', timeout: OPEN_TIMEOUT_MS, windowsVerbatimArguments: true };
-    return spawnSync('cmd', ['/d', '/s', '/c', `start "" ${argument}`], options).status === 0;
+    return spawnSync(shell, ['/d', '/s', '/c', `start "" ${argument}`], options).status === 0;
   }
   if (!environment.DISPLAY && !environment.WAYLAND_DISPLAY) return false;
   if (!isOnPath('xdg-open', environment.PATH)) return false;
