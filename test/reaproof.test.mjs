@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync, gzipSync } from 'node:zlib';
@@ -3493,7 +3493,7 @@ test('of a server-rendering build only what browsers load is read, picked by nam
   const leakingRoot = makeProject(t, { ...files, 'build/client/_app/immutable/entry/app.js': `const k="${browserKey}";` });
 
   for (const result of [scan(root), scan(join(root, 'build'))]) {
-    assert.deepEqual(result.targets.map((target) => target.slice(root.length + 1)), ['build/client', 'build/prerendered']);
+    assert.deepEqual(result.targets.map((target) => relative(root, target).split(sep).join('/')), ['build/client', 'build/prerendered']);
     assert.deepEqual(result.serverBuilds, [join(root, 'build')]);
     assert.deepEqual(result.findings, []);
     assert.equal(result.risk, 'baseline');
@@ -3522,10 +3522,10 @@ test("SvelteKit's own build is read for what browsers load when no adapter wrote
 
   const result = scan(root);
 
-  assert.deepEqual(result.targets.map((target) => target.slice(root.length + 1)), ['.svelte-kit/output/client']);
+  assert.deepEqual(result.targets.map((target) => relative(root, target).split(sep).join('/')), ['.svelte-kit/output/client']);
   assert.deepEqual(result.findings.map(({ rule, path }) => [rule, path]), [['sourcemap-sources', '.svelte-kit/output/client/_app/app.js.map']]);
   // Pointed at, it is read the same way.
-  assert.deepEqual(scan(join(root, '.svelte-kit/output')).targets.map((target) => target.slice(root.length + 1)), ['.svelte-kit/output/client']);
+  assert.deepEqual(scan(join(root, '.svelte-kit/output')).targets.map((target) => relative(root, target).split(sep).join('/')), ['.svelte-kit/output/client']);
 });
 
 test('the scripts Astro puts into the pages it renders are read out of its server code, and nothing else of it is', (t) => {
@@ -3599,7 +3599,7 @@ test("the public part of Nuxt's runtime config, which every page carries, is rea
 
   const result = scan(root);
 
-  assert.deepEqual(result.targets.map((target) => target.slice(root.length + 1)), ['.output/public']);
+  assert.deepEqual(result.targets.map((target) => relative(root, target).split(sep).join('/')), ['.output/public']);
   assert.deepEqual(
     result.findings.map(({ rule, path, detail }) => [rule, path, detail.secretId]),
     [['secret', '.output/server/chunks/nitro/nitro.mjs:/runtimeConfig.public.json', 'ai-api-key']],
