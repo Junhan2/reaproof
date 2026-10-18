@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join, relative, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -3869,9 +3869,19 @@ test('a page is kept outside the project for its owner alone, and a browser is a
   assert.equal(dirname(path), join(home, 'pages'));
   assert.equal(readFileSync(path, 'utf8'), '<p>page</p>');
   if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
-  // An address makes a file name too.
+  // An address makes a file name too, and a long one or a long folder name is cut to fit.
   assert.match(basename(pagePath('https://shop.example/?ref=a:b')), /^[\p{L}\p{N}._-]+\.html$/u);
+  assert.equal(savePage(`https://shop.example/?${'utm_source=newsletter&'.repeat(12)}fbclid=x`, '<p>page</p>').error, undefined);
+  assert.ok(Buffer.byteLength(basename(pagePath(join(root, '한'.repeat(120))))) <= 255);
   assert.equal(openInBrowser(path, { CI: 'true' }, 'darwin'), false);
   assert.equal(openInBrowser(path, { SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' }, 'win32'), false);
   assert.equal(openInBrowser(path, { PATH: process.env.PATH }, 'linux'), false);
+  // On Windows the shell is the one its environment names by full path, never a bare `cmd`.
+  if (process.platform !== 'win32') {
+    assert.equal(openInBrowser(path, { ComSpec: '/usr/bin/true' }, 'win32'), true);
+    assert.equal(openInBrowser(path, { ComSpec: '/usr/bin/false' }, 'win32'), false);
+  }
+  // An empty REAPROOF_HOME counts as unset, so nothing lands under the current folder.
+  process.env.REAPROOF_HOME = '';
+  assert.equal(dirname(pagePath(root)), join(homedir(), '.reaproof', 'pages'));
 });
