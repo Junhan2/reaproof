@@ -60,19 +60,20 @@ if ('IntersectionObserver' in window) {
 
 // The first screen replays a recorded run once it comes into view: the command is typed, the
 // report comes line by line, the page it wrote appears, a yes is typed, and the page after the
-// fix takes its place. Without the observer, or when less motion is asked for, the last scene
-// stands as the page is written.
+// fix takes its place. Until then it shows its first frame. Without the observer, or when less
+// motion is asked for, the last scene stands as the page is written.
 
 const demo = document.querySelector('[data-demo]');
 const prefersLessMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const canPlay = 'IntersectionObserver' in window && !prefersLessMotion;
 
 // The last scene: the end of the run in the terminal, beside the page after the fix.
-if (demo && prefersLessMotion) {
+if (demo && !canPlay) {
   const scroller = demo.querySelector('.demo-scroll');
   scroller.scrollTop = scroller.scrollHeight;
 }
 
-if (demo && 'IntersectionObserver' in window && !prefersLessMotion) {
+if (demo && canPlay) {
   const lines = [...demo.querySelectorAll('.demo-line')];
   const steps = [...demo.querySelectorAll('.demo-steps li')];
   const scroller = demo.querySelector('.demo-scroll');
@@ -98,15 +99,19 @@ if (demo && 'IntersectionObserver' in window && !prefersLessMotion) {
     return true;
   }
 
-  async function play() {
-    const id = ++run;
-    replay.hidden = true;
+  // The first frame: the prompt alone, no page and no step past the first.
+  function reset() {
     demo.classList.remove('has-page', 'is-fixed');
     demo.classList.add('is-playing');
     for (const element of [...lines, answer]) element.classList.remove('is-shown');
     reach(1);
     typed.textContent = '';
     show(lines[0]);
+  }
+
+  async function play() {
+    const id = ++run;
+    reset();
     for (const character of command) {
       if (!(await wait(70, id))) return;
       typed.textContent += character;
@@ -122,17 +127,21 @@ if (demo && 'IntersectionObserver' in window && !prefersLessMotion) {
     demo.classList.add('is-fixed');
     reach(4);
     if (!(await wait(900, id))) return;
-    replay.hidden = false;
+    // From the first end on, "Play again" stays where it is, and so does a keyboard user on it.
+    demo.classList.add('has-played');
   }
 
+  reset();
   replay.addEventListener('click', play);
+  // It starts once its top is above the lowest 30% of the screen, which a screen of any height
+  // reaches; a share of the demo in view would be out of reach on a short screen.
   const observer = new IntersectionObserver(
     (entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return;
       observer.disconnect();
       play();
     },
-    { threshold: 0.35 },
+    { rootMargin: '0px 0px -30% 0px' },
   );
   observer.observe(demo);
 }

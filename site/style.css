@@ -707,6 +707,7 @@ kbd {
 }
 
 .demo-stage {
+  --demo-overlap: 56px;
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   align-items: start;
@@ -717,15 +718,16 @@ kbd {
   margin: 0;
 }
 
+/* The browser window lies over the right edge of the terminal, so the scrolling box, its lines
+   and its scroll bar end where the window starts. */
 .demo-scroll {
   height: 500px;
+  margin-right: var(--demo-overlap);
   overflow: auto;
 }
 
-/* The browser window lies over the right edge of the terminal; lines wrap before it. */
 .demo-scroll pre {
   max-height: none;
-  padding-right: 76px;
   overflow: visible;
 }
 
@@ -737,7 +739,7 @@ kbd {
 .demo-browser {
   position: relative;
   z-index: 1;
-  margin: 64px 0 0 -56px;
+  margin: 64px 0 0 calc(-1 * var(--demo-overlap));
   border: 1px solid var(--window-line);
   background: var(--window);
   box-shadow: 0 30px 60px -30px rgb(0 0 0 / 0.45);
@@ -812,6 +814,12 @@ kbd {
   color: var(--window-ink);
   font: inherit;
   cursor: pointer;
+  /* It holds its place from the start, so nothing below moves when it shows after the first run. */
+  visibility: hidden;
+}
+
+.demo.has-played .demo-replay {
+  visibility: visible;
 }
 
 /* While it plays: lines and the page come in order, and the steps fill as they are reached. */
@@ -853,6 +861,7 @@ kbd {
 
   .demo-scroll {
     height: 340px;
+    margin-right: 0;
   }
 
   .demo-scroll pre {
