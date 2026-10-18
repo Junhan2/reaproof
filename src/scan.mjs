@@ -9,7 +9,7 @@ import { checkSecrets, checkSecretsInBytes, MAX_KEYS_IN_A_FILE } from './checks/
 import { checkLargeMap, collectLargeMap, startLargeMap } from './checks/sourcemaps.mjs';
 import { checkElectronFuses } from './electron.mjs';
 import { checkElf, readElf } from './elf.mjs';
-import { checkEnvValues, readEnvSecrets } from './env.mjs';
+import { checkEnvValues, checkEnvValuesInBytes, readEnvSecrets } from './env.mjs';
 import { checkGo, collectGo, startGo } from './go.mjs';
 import { readIgnoreFile } from './ignore.mjs';
 import { readMachO } from './macho.mjs';
@@ -18,14 +18,20 @@ import { checkPe, readPe } from './pe.mjs';
 import { isLinuxOrWindowsProgram } from './program.mjs';
 import { archiveFinding, checkFile, checkPath, hasContentChecks, isScript, isSourceMap, summarizeFindings } from './rules.mjs';
 import { checkRustSourcePaths, collectRustSourcePaths, startRustSourcePaths } from './rust.mjs';
+import { browserPartsOf, isDirectory, readServerSent } from './server-build.mjs';
 import { isTarName, openTar } from './tar.mjs';
 import { holdsTauriScreenCode } from './tauri.mjs';
 import { INSIDE_ARCHIVE, toShown, toShownText } from './text.mjs';
 import { checkWasm } from './wasm.mjs';
 import { isZip, openZip } from './zip.mjs';
 
-// Where JavaScript toolchains put what actually ships. For Next.js only `.next/static` reaches browsers.
-const KNOWN_OUTPUT_DIRS = ['.next/static', 'out', 'dist', 'build', 'release', '.output/public'];
+// Where JavaScript toolchains put what actually ships. For Next.js only `.next/static` reaches
+// browsers. Of a server-rendering build in one of these, Nuxt's `.output` among them, only the
+// part browsers load is read.
+const KNOWN_OUTPUT_DIRS = ['.next/static', 'out', 'dist', 'build', 'release', '.output'];
+// SvelteKit's own build, which its adapters copy from. Its default adapter writes nothing else
+// on a machine that is not the platform it deploys to.
+const FALLBACK_OUTPUT_DIRS = ['.svelte-kit/output'];
 // What marks the root of a project in a language whose builds land wherever its developer says.
 const NATIVE_PROJECT_FILE =
   /^(?:Package\.swift|Cargo\.toml|go\.mod|build\.gradle(?:\.kts)?|pubspec\.yaml|CMakeLists\.txt|.+\.xcodeproj|.+\.xcworkspace)$/;
@@ -71,11 +77,15 @@ const WASM_OPENING = '\0asm';
 const FRAMEWORK_BY_PACKAGE = {
   next: 'next',
   vite: 'vite',
+  astro: 'astro',
+  nuxt: 'nuxt',
   'react-scripts': 'cra',
   electron: 'electron',
   '@tauri-apps/cli': 'tauri',
   '@tauri-apps/api': 'tauri',
 };
+// What these make is installed whole on a user's machine, any server in it included.
+export const APP_FRAMEWORKS = new Set(['electron', 'tauri']);
 const PACKAGE_MANAGER_BY_LOCKFILE = [
   ['pnpm-lock.yaml', 'pnpm'],
   ['yarn.lock', 'yarn'],
@@ -107,24 +117,53 @@ export class ScanError extends Error {
  * not guessed.
  *
  * @param {string} root absolute path
- * @returns {{ targets: string[], targetsPickedByName: boolean }} absolute paths of what to
- *   scan, and whether they were picked by folder name and not pointed at
+ * @returns {{ targets: string[], targetsPickedByName: boolean, serverBuilds: string[] }}
+ *   absolute paths of what to scan, whether they were picked by folder name and not pointed
+ *   at, and the server-rendering builds among them, whose server part is not read
  */
 export function resolveTargets(root) {
   if (!existsSync(root)) throw new ScanError('path-not-found', root);
-  if (statSync(root).isFile()) return { targets: [root], targetsPickedByName: false };
+  if (statSync(root).isFile()) return { targets: [root], targetsPickedByName: false, serverBuilds: [] };
 
   if (existsSync(join(root, 'package.json'))) {
-    const outputDirs = KNOWN_OUTPUT_DIRS.map((dir) => join(root, dir)).filter(isDirectory);
+    const found = KNOWN_OUTPUT_DIRS.map((dir) => join(root, dir)).filter(isDirectory);
+    const outputDirs = found.length > 0 ? found : FALLBACK_OUTPUT_DIRS.map((dir) => join(root, dir)).filter(isDirectory);
     // A project root without output would only "find" the developer's own source tree.
     if (outputDirs.length === 0) throw new ScanError('no-build-output', root, { buildCommand: findBuildCommand(root) });
-    return { targets: outputDirs, targetsPickedByName: true };
+    return { ...toBrowserParts(outputDirs, keepsServerApart(root)), targetsPickedByName: true };
   }
   // A folder closed to this user is checked as it is, and named there as not read.
   const names = unlessUnlistable(() => readdirSync(root)) ?? [];
   const projectFile = names.find((name) => NATIVE_PROJECT_FILE.test(name));
   if (projectFile) throw new ScanError('artifact-needed', root, { projectFile });
-  return { targets: [root], targetsPickedByName: false };
+  // The output folder of a server-rendering build, pointed at, is read as when it is picked by name.
+  return { ...toBrowserParts([root], keepsServerApart(findProjectFolder(root))), targetsPickedByName: false };
+}
+
+/**
+ * Whether the server of a project's build stays on a server. A website's does. All of an app's
+ * output, Electron's or Tauri's, is installed on the user's machine, a server in it included.
+ *
+ * @param {string | null} project
+ */
+function keepsServerApart(project) {
+  if (project === null || !existsSync(join(project, 'package.json'))) return false;
+  return !detectFrameworks(project).some((framework) => APP_FRAMEWORKS.has(framework));
+}
+
+/**
+ * Output folders as the folders of them that reach browsers. A server-rendering build is read
+ * for its browser part, and is named among the server builds, whose server part is not read.
+ */
+function toBrowserParts(outputDirs, isServerApart) {
+  const targets = [];
+  const serverBuilds = [];
+  for (const dir of outputDirs) {
+    const parts = isServerApart ? browserPartsOf(dir) : null;
+    targets.push(...(parts ?? [dir]));
+    if (parts) serverBuilds.push(dir);
+  }
+  return { targets, serverBuilds };
 }
 
 /**
@@ -146,9 +185,12 @@ export function toDisplayPath(root, path) {
  * of the files read were such archives. `scriptsScanned` and `programsScanned` say how many
  * were JavaScript and native programs. The lists name what could not be read for a reason
  * worth telling. `unreadScreenCode` names programs that were read and carry a screen inside
- * them that was not: a Tauri app's HTML and JavaScript.
+ * them that was not: a Tauri app's HTML and JavaScript. `serverBuilds` names the output folders
+ * of server-rendering builds, of which only what browsers load was read, and `serverSent` what
+ * was read out of their server code because the server puts it into the pages it sends;
+ * `serverSentUnread` names those whose server code did not hold that in the form it is read in.
  *
- * @param {{ root: string, targets: string[], targetsPickedByName: boolean, frameworks: string[] }} subject what was looked at
+ * @param {{ root: string, targets: string[], targetsPickedByName: boolean, serverBuilds: string[], frameworks: string[] }} subject what was looked at
  */
 export function startResult(subject) {
   return {
@@ -168,6 +210,8 @@ export function startResult(subject) {
     unreadableFolders: [],
     keysOnlyFiles: [],
     ignored: [],
+    serverSent: [],
+    serverSentUnread: [],
   };
 }
 
@@ -202,17 +246,19 @@ export function finishResult(result) {
  * Reads shipped files the way an analysis tool would and reports what they give away.
  *
  * @param {string} inputPath project root, output directory, packaged app, program or archive
+ * @param {{ environment?: Record<string, string | undefined> }} [options] the environment the
+ *   build ran in, whose secret values must not ship either: this process's, unless given
  */
-export function scan(inputPath) {
+export function scan(inputPath, { environment = process.env } = {}) {
   const root = resolve(inputPath);
   const targets = resolveTargets(root);
   // What must not ship, and what built it, is said by the project the path belongs to, also
   // when the path given is the build output inside it.
   const project = findProjectFolder(root) ?? root;
   const result = startResult({ root, ...targets, frameworks: detectFrameworks(project) });
-  const envSecrets = readEnvSecrets(project).map((secret) => ({
+  const envSecrets = readEnvSecrets(project, environment).map((secret) => ({
     ...secret,
-    envFile: toDisplayPath(root, join(project, secret.envFile)),
+    envFile: secret.envFile === null ? null : toDisplayPath(root, join(project, secret.envFile)),
   }));
   // What the project says to leave out is matched against each path as it is from the project
   // folder, as `.gitignore` is, and not as it is shown.
@@ -240,6 +286,34 @@ export function scan(inputPath) {
       const displayPath = toDisplayPath(root, path);
       if (isDirectory) addFindings(state, checkStrayDirectory({ path: displayPath, name }), path);
       else scanFile({ displayPath, name, diskPath: path, matchedAs, open: (use) => openOnDisk(path, use) }, state);
+    }
+  }
+  // What a server puts into the pages it sends is browser code, wherever in its own code it sits.
+  // Each piece is read as a file in an archive is, named by the file it sits in, and is left out
+  // with that file or a folder it sits in, as a walk from the build down would leave them out.
+  const isLeftOut = (serverBuild, path) => {
+    const below = relative(serverBuild, path).split(sep);
+    return below.some((name, at) => {
+      const part = join(serverBuild, ...below.slice(0, at + 1));
+      return isIgnored(state, fromProject(part), { name, isDirectory: at < below.length - 1 }, () => toDisplayPath(root, part));
+    });
+  };
+  for (const serverBuild of result.serverBuilds) {
+    const { sent, isWhole } = readServerSent(serverBuild, result.frameworks);
+    if (!isWhole) result.serverSentUnread.push(toDisplayPath(root, serverBuild));
+    for (const { path, pieces } of sent) {
+      if (ignores && isLeftOut(serverBuild, path)) continue;
+      const host = toDisplayPath(root, path);
+      for (const { inner, text } of pieces) {
+        const displayPath = `${host}${INSIDE_ARCHIVE}${toShownText(inner)}`;
+        const bytes = Buffer.from(text, 'utf8');
+        const open = (use) => {
+          use(lazyBytes(bytes.length, () => bytes));
+          return true;
+        };
+        result.serverSent.push(displayPath);
+        scanFile({ displayPath, name: basename(inner), diskPath: null, matchedAs: null, open }, state);
+      }
     }
   }
   return finishResult(result);
@@ -461,7 +535,8 @@ export function scanLargeMap(displayPath, source, envSecrets) {
   const envFindings = new Map();
   const hasEnvValues = envSecrets.length > 0;
   for (const chunk of readChunks(source, CHUNK_BYTES, OVERLAP_BYTES)) {
-    collectLargeMap(source, chunk, OVERLAP_BYTES, map);
+    // Once the source shows, nothing more of the map is looked for, only `.env` values.
+    if (!map.carriesSource) collectLargeMap(source, chunk, OVERLAP_BYTES, map);
     // With no `.env` value to look for, the rest can tell nothing more once the source shows.
     if (!hasEnvValues && map.carriesSource) break;
     if (!hasEnvValues) continue;
@@ -537,16 +612,15 @@ function scanBytes({ displayPath, diskPath, source, opening }, state) {
       collectGo(chunk, go);
     }
     if (isProgram) holdsScreenCode ||= holdsTauriScreenCode(chunk.bytes);
-    const inThisChunk = [checkElectronFuses(displayPath, source, chunk)];
+    // `.env` values are looked for in the bytes as they are, in each form a value is kept in.
+    const inThisChunk = [checkElectronFuses(displayPath, source, chunk), checkEnvValuesInBytes(displayPath, chunk.bytes, state.envSecrets)];
     // The search for keys stops at its limit; the rest goes on to the end of the file.
-    const wantsKeys = keys.length < MAX_KEYS_IN_A_FILE;
-    if (wantsKeys || state.envSecrets.length > 0) {
+    if (keys.length < MAX_KEYS_IN_A_FILE) {
       for (const text of readAsText(chunk.bytes, isText)) {
         // What a finding quotes is a view into the text, and kept as it is would keep the
         // whole chunk in memory until the file is done. Findings leave here as copies.
-        const found = wantsKeys ? findKeys(displayPath, text, place, seenKeys) : [];
+        const found = findKeys(displayPath, text, place, seenKeys);
         if (found.length > 0) keys.push(...structuredClone(found));
-        inThisChunk.push(checkEnvValues(displayPath, text, state.envSecrets));
       }
     }
     for (const finding of inThisChunk.flat()) others.set(JSON.stringify(finding), finding);
@@ -662,6 +736,3 @@ function readManifest(root) {
   }
 }
 
-function isDirectory(path) {
-  return existsSync(path) && statSync(path).isDirectory();
-}

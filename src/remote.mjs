@@ -51,6 +51,7 @@ export async function scanDeployedSite(pageAddress) {
     isDeployed: true,
     targets: [page.href],
     targetsPickedByName: false,
+    serverBuilds: [],
     frameworks: [],
   });
   // A file that is not there, or does not answer, is no finding. One too large to read is

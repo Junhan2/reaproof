@@ -341,11 +341,9 @@ function choicesOf(source) {
 }
 
 // In text a match ends where the key ends.
-const TEXT_SEARCH = prepareSearch(
-  SECRET_PATTERNS,
-  { judged: Infinity, same: Infinity },
-  (value) => `${value.slice(0, 8)}…${value.slice(-4)}`,
-);
+const TEXT_HEAD = { judged: Infinity, same: Infinity };
+const redactText = (value) => `${value.slice(0, 8)}…${value.slice(-4)}`;
+const TEXT_SEARCH = prepareSearch(SECRET_PATTERNS, TEXT_HEAD, redactText);
 // An AWS key ID is the one pattern here made of capitals and digits alone, and base64 text
 // is full of those, so in bytes encoded data spells one out by chance. Two cases turned up
 // in real files. The WebAssembly that Node.js carries as base64 runs for megabytes without
@@ -439,6 +437,44 @@ function search({ patterns, anySecret, isNotAStandIn, sameLength, redact: redact
     }
   }
   return findings;
+}
+
+// A Google API key, AIza and 35 more, is meant for browsers when it is a Firebase app's, and
+// sits there in the app's config beside its authDomain and projectId. A Gemini API key has the
+// same form, and whoever holds one calls Gemini on its owner's bill; Google AI Studio's app
+// template hands one to browser code. In code that calls Gemini, a Google API key outside a
+// Firebase config is taken for a Gemini key.
+const GOOGLE_API_KEY = /\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g;
+const CALLS_GEMINI = /generativelanguage\.googleapis\.com|\bgenerateContent(?:Stream)?\b|\bgetGenerativeModel\b/;
+const FIREBASE_CONFIG_FIELD = /\b(?:authDomain|projectId|storageBucket|messagingSenderId|appId|measurementId)\b/;
+// How far an object literal is followed from a key, each way, for the fields beside it.
+const OBJECT_REACH = 600;
+const GEMINI_SEARCH = prepareSearch(
+  [{ id: 'gemini-key', severity: 'critical', regex: GOOGLE_API_KEY, accepts: looksIssued }],
+  TEXT_HEAD,
+  redactText,
+);
+
+/**
+ * Finds Gemini API keys in browser code: Google API keys in code that calls Gemini, other
+ * than a Firebase app's own. Nothing it returns contains a whole key.
+ */
+export function checkBrowserGeminiKeys(path, text) {
+  if (!text.includes('AIza') || !CALLS_GEMINI.test(text)) return [];
+  // A key a Firebase config holds is the app's browser key, also where the code uses it again.
+  const firebaseKeys = new Set();
+  for (const match of text.matchAll(GOOGLE_API_KEY)) {
+    if (isInFirebaseConfig(text, match.index, match[0].length)) firebaseKeys.add(match[0]);
+  }
+  return search(GEMINI_SEARCH, path, text, WHOLE_FILE, firebaseKeys);
+}
+
+/** Whether the object literal a key sits in, as far as it is followed, holds a Firebase app's config. */
+function isInFirebaseConfig(text, index, length) {
+  const closing = text.indexOf('}', index + length);
+  const start = Math.max(text.lastIndexOf('{', index), index - OBJECT_REACH, 0);
+  const end = Math.min(closing === -1 ? text.length : closing, index + length + OBJECT_REACH);
+  return FIREBASE_CONFIG_FIELD.test(text.slice(start, end));
 }
 
 /** Whether a value is a database or queue address with a real password in it. */

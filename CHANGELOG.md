@@ -2,6 +2,18 @@
 
 What changed in each release published to npm, newest first.
 
+## Unreleased (not published yet)
+
+- Reads only what browsers load of a server-rendering build: the `client` or `public` half beside `server`, with SvelteKit's `prerendered` pages, as SvelteKit's Node adapter, React Router, Astro and Nuxt write a build, picked by name or pointed at. On 22 test apps built with Next.js 16.4.2, Vite 8.3.4, SvelteKit 3.1.0, Nuxt 4.6.2, Astro 7.4.0 and React Router 8.4.0, 0.7.0 rated 4 of the 8 apps built right with a leak, from keys, an AI prompt and code that stay on the server; now none of them. The report names such builds, and the JSON lists them in `serverBuilds`. An Electron or Tauri project is still read whole: an app installs all of its output, a server in it too.
+- Reads out of the server code what the server puts into every page, as browser code: the scripts Astro puts into the pages it renders, and the public part of Nuxt's runtime config. 0.7.0 missed a server key in Nuxt's, and listed one in Astro's among 15 false alarms from the same build. The JSON lists them in `serverSent`; where a build does not hold them in the form Astro 7.4.0 and Nuxt 4.6.2 write them, the report says they were not read, and the JSON lists the build in `serverSentUnread`.
+- Reads SvelteKit's own build in `.svelte-kit/output` when no other output is there, as SvelteKit's default adapter leaves it on a machine that is not where it deploys: 0.7.0 stopped with "no build output" after the build succeeded.
+- Reports a Google API key in browser code that calls Gemini, as Google AI Studio's app template hands one over, and not the key of a Firebase app config beside it. 0.7.0 found such a key only when the same value sat in a `.env` file.
+- Compares the environment it runs in with what ships, for variables named like a secret and for addresses that carry a password, as it does values from `.env`: a CI job or a hosting platform has the build's values there. A token of the app's own, in no vendor's format, handed to browser code was found by 0.7.0 only with a `.env` file; now also in a CI job that builds and then checks.
+- Takes the variables SvelteKit 3 declares `public: true` in `src/env.js` or `src/env.ts` for ones published on purpose, as it takes those with a public prefix: 0.7.0 reported the values of three public keys declared so as critical leaks. So it takes a variable with `PUBLISHABLE` as a part of its name, as `STRIPE_PUBLISHABLE_KEY`, and a value in the form of a Stripe or Supabase publishable key, unless the name also says it is a secret. A name with `PUBLIC` in it is not taken so: Railway names the outside address of a database, password and all, `DATABASE_PUBLIC_URL`.
+- Does not take minified code for code left unminified because a template literal in it keeps its line breaks, as SvelteKit's error page does in every build: 0.7.0 rated each SvelteKit app moderate for it.
+- Says which setting keeps maps out of the next build for Nuxt and Astro too.
+- On the four public bundles and the 23 saved test targets of 0.7.0, the findings are the same.
+
 ## 0.7.0 (2026-10-17)
 
 - Reads Linux and Android programs (ELF) and Windows programs (PE) for the names and debug information a release should not keep, as it read Mac programs: the symbol table, and DWARF debug information with the original file names. A default `go build` on Linux kept 2,519 names that 0.6.0 did not report.
