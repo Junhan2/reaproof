@@ -25,7 +25,7 @@
 
 <!-- AnnouncementBar -->
 <aside class="announce" aria-label="Announcement">
-  <p class="wrap"><strong>New in 0.7.0:</strong> Android apps, Windows and Linux programs, and SARIF for GitHub code scanning. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.7.0">Release notes</a></p>
+  <p class="wrap"><strong>New in 0.8.0:</strong> SvelteKit, Astro, Nuxt and React Router builds checked for what reaches browsers, Gemini keys, and your CI job's secrets compared with what ships. <a href="https://github.com/Junhan2/reaproof/releases/tag/v0.8.0">Release notes</a></p>
 </aside>
 
 <!-- Nav -->
@@ -119,7 +119,7 @@ Undo: reaproof undo</pre>
         <li class="step">
           <span class="step-n" aria-hidden="true">1</span>
           <h3>Run it where you build</h3>
-          <p>In a JavaScript project it finds the build output by name: <code>dist</code>, <code>.next/static</code>, <code>out</code>, <code>build</code>. Anything else, a folder, an app, a program or an archive, it reads as given.</p>
+          <p>In a JavaScript project it finds the build output by name: <code>dist</code>, <code>.next/static</code>, <code>out</code>, <code>build</code>. Of a server-rendering build it reads what browsers load, not the server's own code. Anything else, a folder, an app, a program or an archive, it reads as given.</p>
         </li>
         <li class="step">
           <span class="step-n" aria-hidden="true">2</span>
@@ -182,7 +182,7 @@ Undo: reaproof undo</pre>
         <p class="stat-label">dependencies, and nothing to configure</p>
       </div>
       <div class="stat">
-        <p class="stat-n">60</p>
+        <p class="stat-n">61</p>
         <p class="stat-label">patterns for server keys, from Stripe and AWS to xAI and Supabase</p>
       </div>
       <div class="stat">
@@ -216,6 +216,24 @@ Undo: reaproof undo</pre>
         </article>
       </div>
 
+      <h3 class="sub">Right answers on framework builds</h3>
+      <div class="table-wrap">
+        <table class="speed versus">
+          <thead>
+            <tr><th scope="col">22 test apps, six frameworks</th><th scope="col">0.7.0</th><th scope="col">0.8.0</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Leaks found, of 14 put in, with the <code>.env</code> file there (your machine)</td><td class="num">13</td><td class="num">14</td></tr>
+            <tr><td>The same, with the values in the environment instead (a CI job)</td><td class="num">11</td><td class="num">14</td></tr>
+            <tr><td>The same, with neither</td><td class="num">11</td><td class="num">13</td></tr>
+            <tr><td>Apps built right that were rated with a leak, of 8</td><td class="num">4</td><td class="num">0</td></tr>
+            <tr><td>Apps with any false alarm, of 22</td><td class="num">10</td><td class="num">0</td></tr>
+            <tr><td>Apps it could not check, of 22</td><td class="num">1</td><td class="num">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small">Built on 2026-10-18 in Docker with Next.js 16.4.2, Vite 8.3.4, SvelteKit 3.1.0, Nuxt 4.6.2, Astro 7.4.0 and React Router 8.4.0, each built right, with source maps on, and with a server key handed to browser code. The false alarms of 0.7.0 came from reading server code, which does not ship. With neither a <code>.env</code> file nor the environment, a token of the app's own, in no vendor's format, cannot be told from any other value. <a href="https://github.com/Junhan2/reaproof#right-answers-on-framework-builds">How the apps were built</a></p>
+
       <h3 class="sub">Same answer as the reference tool</h3>
       <div class="table-wrap">
         <table class="match">
@@ -245,14 +263,14 @@ Undo: reaproof undo</pre>
           <tbody>
             <tr><td>Our web test app</td><td class="num">6.3 kB</td><td class="num">3</td><td class="num">0.04 s</td></tr>
             <tr><td>Our Vite build with eight SDKs</td><td class="num">1.8 MB</td><td class="num">3</td><td class="num">0.05 s</td></tr>
-            <tr><td>ripgrep 15.2.0 for Windows, <code>.zip</code></td><td class="num">1.8 MB</td><td class="num">14</td><td class="num">0.06 s</td></tr>
-            <tr><td>Fossify Gallery 1.14.0, <code>.apk</code></td><td class="num">38.5 MB</td><td class="num">1,606</td><td class="num">0.18 s</td></tr>
-            <tr><td>Joplin 3.7.10, <code>.apk</code></td><td class="num">177.1 MB</td><td class="num">1,162</td><td class="num">0.59 s</td></tr>
-            <tr><td>Electron Fiddle 0.39.0 for macOS, <code>.zip</code></td><td class="num">117.8 MB</td><td class="num">366</td><td class="num">1.30 s</td></tr>
+            <tr><td>ripgrep 15.2.0 for Windows, <code>.zip</code></td><td class="num">1.8 MB</td><td class="num">14</td><td class="num">0.07 s</td></tr>
+            <tr><td>Fossify Gallery 1.14.0, <code>.apk</code></td><td class="num">38.5 MB</td><td class="num">1,606</td><td class="num">0.19 s</td></tr>
+            <tr><td>Joplin 3.7.10, <code>.apk</code></td><td class="num">177.1 MB</td><td class="num">1,162</td><td class="num">0.63 s</td></tr>
+            <tr><td>Electron Fiddle 0.39.0 for macOS, <code>.zip</code></td><td class="num">117.8 MB</td><td class="num">366</td><td class="num">1.32 s</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="small">Median of three runs of <code>reaproof &lt;target&gt; --json</code> on 2026-10-17, on an Apple M4 Pro with Node 24.14.0, Node's own start included. Size is the file or folder on disk. Details of every check are in the <a href="https://github.com/Junhan2/reaproof#native-programs">guide</a>.</p>
+      <p class="small">Median of three runs of <code>reaproof &lt;target&gt; --json</code> with 0.8.0 on 2026-10-18, on an Apple M4 Pro with Node 24.14.0, Node's own start included, in a shell with two variables named like a secret, which it compares with what ships. Size is the file or folder on disk. Details of every check are in the <a href="https://github.com/Junhan2/reaproof#native-programs">guide</a>.</p>
     </div>
   </section>
 
@@ -270,7 +288,7 @@ Undo: reaproof undo</pre>
         <article class="feature">
           <p class="chips"><span class="chip chip-critical">Critical</span><span class="chip chip-high">High</span></p>
           <h3>Server keys and <code>.env</code> values</h3>
-          <p>60 key patterns, looked for in code, scripts and settings files of any name, and in programs and bytecode for the services an app calls while it runs. Also any secret value from your own <code>.env</code> that appears word for word in what ships. Keys meant for browsers are not reported, and secrets are never printed in full.</p>
+          <p>61 key patterns, looked for in code, scripts and settings files of any name, and in programs and bytecode for the services an app calls while it runs; a Google API key counts as a Gemini key in browser code that calls Gemini. Also any secret value from your <code>.env</code> or your CI job's environment that appears word for word in what ships. Keys meant for browsers are not reported, and secrets are never printed in full.</p>
         </article>
         <article class="feature">
           <p class="chips"><span class="chip chip-critical">Critical</span><span class="chip chip-high">High</span><span class="chip chip-medium">Medium</span></p>
@@ -351,7 +369,7 @@ Undo: reaproof undo</pre>
       <div class="target-grid">
         <article class="target">
           <h3>Web builds</h3>
-          <p>Next.js, Vite, Create React App, Nuxt and any folder of HTML, JavaScript, CSS and maps.</p>
+          <p>Next.js, Vite, Create React App, Nuxt, SvelteKit, Astro, React Router and any folder of HTML, JavaScript, CSS and maps. Of a server-rendering build it reads what browsers load.</p>
         </article>
         <article class="target">
           <h3>Desktop apps</h3>
@@ -386,6 +404,7 @@ Undo: reaproof undo</pre>
           <li><strong><code>--json</code> for agents and scripts</strong>: the verdict comes first, and text copied from scanned files is marked as data, not instructions.</li>
           <li><strong><code>--sarif</code> for GitHub code scanning</strong>: one rule for each kind of finding, one result for each finding.</li>
           <li><strong><code>.reaproofignore</code> for files you know about</strong>, in <code>.gitignore</code> patterns. The report names everything it left out.</li>
+          <li><strong>The build's own secrets, compared.</strong> Run in the same job right after the build, it compares the job's environment variables named like a secret with what ships, as it does values from <code>.env</code>, so a token in no known format is found too.</li>
           <li><strong>Reads only by default.</strong> <code>fix</code> shows the list and asks, keeps a backup outside the project, and <code>undo</code> reverses it.</li>
           <li><strong>No dependencies. MIT.</strong> Node.js 18.3 or later on Linux, macOS and Windows.</li>
         </ul>

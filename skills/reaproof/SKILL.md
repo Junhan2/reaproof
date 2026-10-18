@@ -14,6 +14,7 @@ The user may have no security background. Explain every finding by its effect on
    - If the answer is `{ "error": ... }` instead, `error.code` says why. `artifact-needed` means the folder is a project in another language (Swift, Rust, Go and the like), where Reaproof does not guess what ships: ask the user which file or folder ships, for example the `.app`, and run `npx reaproof <that path> --json`. `page-unreachable` carries the reason an address did not answer.
    - `unrated` means what ships could not be read. Never report it as clean. `explain.unread` says what was not read and how to get at it, for example how to open a disk image. Do that and run the check on what is inside.
    - If `unreadScreenCode` lists a program, it is a Tauri app whose screen code was not read: run `npx reaproof --json` in the project folder as well, where that code is the build output.
+   - `serverBuilds` lists server-rendering builds (SvelteKit, Astro, React Router, Nuxt) of which only what browsers load was read, on purpose: their server code stays on the server. Do not point Reaproof at their `server` folder. `serverSentUnread` lists builds where what the server puts into its pages could not be read: say so, as for `explain.unread`.
    - `explain.unread` also names folders that could not be opened, files over 30 MB that were searched for keys alone, and what the project's `.reaproofignore` left out (`ignored`). Say each of these to the user.
    - Never add a pattern to `.reaproofignore` to make a finding go away. Only the user decides that a file is known and accepted, and a file left out still ships.
    - For GitHub code scanning in CI, `npx reaproof --sarif` prints the same result as SARIF. Do not use it together with `--json`.
@@ -28,6 +29,8 @@ The user may have no security background. Explain every finding by its effect on
   - Next.js: remove `productionBrowserSourceMaps: true` from `next.config`.
   - Vite: set `build.sourcemap` to `false`. `'hidden'` still writes the map files into the output.
   - Create React App: build with `GENERATE_SOURCEMAP=false`.
+  - Nuxt: keep `sourcemap.client` at `false` in `nuxt.config`. `'hidden'` still writes the map files into the output.
+  - Astro: set `vite.build.sourcemap` to `false` in `astro.config`.
   - If an error tracker needs the maps, upload them there and delete them from the output afterwards.
 - `sourcemap-inline`: only the build setting fixes it.
 - `stray-file`: take the file out of what ships and find what copies it in, usually a `public` folder or a packaging file list. Never delete debug information (`.dSYM`): move it out of the output and keep it, because it is what makes crash reports readable.
@@ -55,6 +58,8 @@ A `secret` or `env-value` finding means a server-only value is inside code that 
 1. Tell the user to revoke or change the value where it was issued.
 2. Move the call that needs it to the user's server, for example a route handler or a serverless function, and read the value from a server environment variable without a public prefix.
 3. Rebuild and run the check again.
+
+An `env-value` finding whose `envFile` is `null` came from the environment the check ran in, such as a CI job: change that value where the build gets it.
 
 ## Showing the effect
 
