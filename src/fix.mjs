@@ -99,10 +99,19 @@ export function undoLastFix(root) {
   return { backupDir, restored, conflicts };
 }
 
-function projectBackupsDir(root) {
-  const home = process.env.REAPROOF_HOME ?? join(homedir(), '.reaproof');
+/** Where Reaproof keeps what it writes, outside every project: backups and report pages. */
+export function reaproofHome() {
+  return process.env.REAPROOF_HOME ?? join(homedir(), '.reaproof');
+}
+
+/** A name of its own for each checked path: its last part and a hash of the whole of it. */
+export function projectKey(root) {
   const pathKey = createHash('sha256').update(root).digest('hex').slice(0, 12);
-  return join(home, 'backups', `${basename(root)}-${pathKey}`);
+  return `${basename(root)}-${pathKey}`;
+}
+
+function projectBackupsDir(root) {
+  return join(reaproofHome(), 'backups', projectKey(root));
 }
 
 function moveFile(from, to) {
