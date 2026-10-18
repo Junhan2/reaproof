@@ -26,7 +26,7 @@ npx reaproof
 
 ## How it works
 
-1. **It reads, and changes nothing.** In a JavaScript project folder it finds the build output by name (`dist`, `.next/static`, `out`, `build` and the like). Anything else it reads as given: a folder, an app, a program or an archive.
+1. **It reads, and changes nothing.** In a JavaScript project folder it finds the build output by name (`dist`, `.next/static`, `out`, `build` and the like). Of a server-rendering build, as SvelteKit, Astro, React Router and Nuxt make one, it reads what browsers load and what the server puts into every page, not the server's own code. Anything else it reads as given: a folder, an app, a program or an archive.
 2. **It rates and explains.** The rating comes first. Each finding follows, worst first, with what it exposes and how to close it. Right under the count of files read, it says what it did not read.
 3. **It offers the fix it can make.** It lists the source map files it can take out and, after a `y`, moves them out of your output into a backup. `npx reaproof undo` puts them back.
 4. **You close the rest and run it again.** Each finding names the setting to change. A finding that is gone is fixed. The report ends with what to do next.
@@ -116,6 +116,19 @@ To keep them from coming back on the next build:
 
 Four TypeScript files bundled with Bun 1.2.19, measured with rea 6.4.0 on 2026-10-14; rea 6.5.0 gave the same counts on 2026-10-16. Minifying alone changed none of rea's counts. The whole measurement, with a macOS program, is under [What the fixes change, measured](#what-the-fixes-change-measured).
 
+### Right answers on framework builds
+
+| 22 test apps, six frameworks | 0.7.0 | Now |
+| --- | ---: | ---: |
+| Leaks found, of 14 put in, with the `.env` file there (your machine) | 13 | 14 |
+| The same, with the values in the environment instead (a CI job) | 11 | 14 |
+| The same, with neither | 11 | 13 |
+| Apps built right that were rated with a leak, of 8 | 4 | 0 |
+| Apps with any false alarm, of 22 | 10 | 0 |
+| Apps it could not check, of 22 | 1 | 0 |
+
+Built on 2026-10-18 in Docker with Next.js 16.4.2, Vite 8.3.4 with React 19.3.1, SvelteKit 3.1.0, Nuxt 4.6.2, Astro 7.4.0 and React Router 8.4.0, each built right (the keys meant for browsers in browser code, server keys and an AI prompt in server code), with source maps on, and with a server key handed to browser code; and with Vite, a Gemini key handed over as Google AI Studio's app template does, and a token of the app's own. The false alarms of 0.7.0 came from reading server code, which does not ship, on SvelteKit, Astro and React Router, from SvelteKit's error page, and from the public values SvelteKit 3 declares. It missed a key in Nuxt's public runtime config and, without a `.env` file, the Gemini key, and it listed the key in a script Astro puts into its pages among 15 false alarms from the same build. With neither the file nor the environment, the token of the app's own, in no vendor's format, cannot be told from any other value.
+
 ### Same answer as the reference tool
 
 | What is counted | On | Reaproof | Reference tool | |
@@ -153,8 +166,8 @@ Median of three runs of `reaproof <target> --json` on 2026-10-17, on an Apple M4
 | Finding | Severity | Automatic fix |
 | --- | --- | --- |
 | Settings files (`.env`), a `.git` folder, key stores, database files and debug symbols (`.dSYM`, a `.pdb`, an R8 `mapping.txt`) mixed into the output | 🔴 Critical or 🟠 high | No, take them out and stop them being copied in. Keep debug symbols, somewhere else |
-| Server-only keys in shipped files, whether code, a script, a settings file of any name, a native program or bytecode: Stripe secret and restricted keys, Supabase secret and `service_role` keys, GitHub tokens, AWS access keys, private keys, AI service keys, database addresses that carry a password, and the keys of 53 more services by the prefixes they are issued with (see "Key formats") | 🔴 Critical or 🟠 high | No, revoke the key and move it to a server |
-| A secret value from the project's own `.env` that appears word for word in any shipped file | 🔴 Critical or 🟠 high | No, change the value and move it to a server |
+| Server-only keys in shipped files, whether code, a script, a settings file of any name, a native program or bytecode: Stripe secret and restricted keys, Supabase secret and `service_role` keys, GitHub tokens, AWS access keys, private keys, AI service keys, a Google API key in browser code that calls Gemini, database addresses that carry a password, and the keys of 53 more services by the prefixes they are issued with (see "Key formats") | 🔴 Critical or 🟠 high | No, revoke the key and move it to a server |
+| A secret value from the project's own `.env`, or from the environment the build ran in, that appears word for word in any shipped file | 🔴 Critical or 🟠 high | No, change the value and move it to a server |
 | Source map files that contain your original source text | 🔴 Critical | Yes |
 | Source maps embedded inside code files | 🔴 Critical | No, turn it off in the build settings |
 | A program signed with an entitlement that opens it up while it runs: `get-task-allow` on macOS or iOS (high), `disable-library-validation` on macOS (medium) | 🟠 High or 🟡 medium | No, leave it out of release signing |
@@ -179,7 +192,7 @@ Median of three runs of `reaproof <target> --json` on 2026-10-17, on an Apple M4
 | Electron `.asar` archives, which anyone can unpack | 🔵 Note | No |
 | A packaged Electron app for macOS or Windows that runs its code even after someone changed it: the fuses that check `app.asar` against what was packaged (`embeddedAsarIntegrityValidation`, `onlyLoadAppFromAsar`) are off, as they are by default | 🔵 Note | No, turn them on with `@electron/fuses`; Electron Forge and Packager add the hash the check uses |
 
-Keys that are meant for browsers, such as Stripe publishable keys, Supabase `anon` and publishable keys, PostHog project keys (`phc_`) and Mapbox public tokens (`pk.`), are not reported. Neither is a key with the word `example` in it, which is how documentation and self-tests write a stand-in, nor the password of a database on the same machine (`localhost`, `127.0.0.1`). For the 53 services below, neither is a key that ends in a run of one character, as the Slack webhook address in Slack's documentation ends in `XXXXXXXXXXXXXXXXXXXXXXXX`, or that counts up, as `0123456789abcdef`. Secrets are never printed in full, and values from `.env` are reported by variable name only. In the list of server addresses, and in what `measure` lists, a part of an address that is long and changes between letters and digits four times or more is shown as `…`: keys and tokens look so, as the end of a Discord webhook or a Telegram bot address does, and names and file names do not. Of the 1,793 addresses that the apps in `/Applications` on the test Mac name, 4 had such a part. A webhook found as a key is shown up to its secret, its last part.
+Keys that are meant for browsers, such as Stripe publishable keys, Supabase `anon` and publishable keys, PostHog project keys (`phc_`), Mapbox public tokens (`pk.`) and the Google API key of a Firebase app's config, are not reported. A Google API key has one form for both, and Gemini's lets whoever holds it call Gemini on its owner's bill: in code that calls Gemini, one outside a Firebase config is reported as a Gemini key. Neither is a key with the word `example` in it, which is how documentation and self-tests write a stand-in, nor the password of a database on the same machine (`localhost`, `127.0.0.1`). For the 53 services below, neither is a key that ends in a run of one character, as the Slack webhook address in Slack's documentation ends in `XXXXXXXXXXXXXXXXXXXXXXXX`, or that counts up, as `0123456789abcdef`. Secrets are never printed in full, and values from `.env` are reported by variable name only. In the list of server addresses, and in what `measure` lists, a part of an address that is long and changes between letters and digits four times or more is shown as `…`: keys and tokens look so, as the end of a Discord webhook or a Telegram bot address does, and names and file names do not. Of the 1,793 addresses that the apps in `/Applications` on the test Mac name, 4 had such a part. A webhook found as a key is shown up to its secret, its last part.
 
 ### Key formats
 
@@ -188,7 +201,9 @@ Each is told by the prefix the service issues its keys with, as the service docu
 - Looked for everywhere, programs and bytecode included, because an app calls these services while it runs: xAI, Groq, OpenRouter, Perplexity, and OpenAI's service account, admin and older keys beside its project keys; Slack tokens and webhook addresses, Discord webhook addresses, SendGrid, Brevo; webhook signing secrets (`whsec_`, Stripe's and those that Svix sends for Clerk and Resend), Shopify, Square; Mapbox secret tokens.
 - Looked for in text only, in code, scripts and settings files of any name: Replicate, Hugging Face, NVIDIA, Pinecone, LangSmith, Langfuse, Resend; GitLab, npm, PyPI, RubyGems, Docker Hub, Postman, Linear, Notion, Airtable, Atlassian, Contentful, Typeform; Supabase management tokens, DigitalOcean, PlanetScale, Heroku, Fly.io, Deno Deploy, Databricks, Doppler, HashiCorp Vault, Tailscale, Pulumi, Cloudflare Origin CA keys, 1Password service accounts, `age` secret keys, Alibaba Cloud key IDs, Azure storage and messaging keys; Sentry, Grafana, New Relic, Dynatrace, PostHog personal keys. Most are for publishing, deploying or running servers, and sit in settings files and scripts. In bytes, where strings run into each other, the names in a program spell their shorter prefixes: across the programs in `/Applications` on the test Mac, none of the 71 matches of these kinds was a key issued for the app (61 were names such as `tfp_8sanitize` or stand-ins, and 10 were one Alibaba key ID that unrelated programs all carry), and searching for the rest in bytes made the search half as long again.
 
-For the `.env` comparison, Reaproof reads the `.env` files of the project the path belongs to: the nearest folder, the path itself or one above it, that holds a `package.json` or another project file such as `Package.swift` or `Cargo.toml`. The search stops short of your home folder, so a `package.json` left there does not make everything under it one project. The values are compared and never printed. Variables with a prefix their framework documents as public (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`, `NUXT_PUBLIC_`, `GATSBY_`, `VUE_APP_`, `STORYBOOK_`) are expected in the output, unless the name itself says `SECRET`, `PRIVATE`, `PASSWORD` or `SERVICE_ROLE`.
+For the `.env` comparison, Reaproof reads the `.env` files of the project the path belongs to: the nearest folder, the path itself or one above it, that holds a `package.json` or another project file such as `Package.swift` or `Cargo.toml`. The search stops short of your home folder, so a `package.json` left there does not make everything under it one project. The values are compared and never printed. Variables with a prefix their framework documents as public (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`, `NUXT_PUBLIC_`, `GATSBY_`, `VUE_APP_`, `STORYBOOK_`) are expected in the output, unless the name itself says `SECRET`, `PRIVATE`, `PASSWORD` or `SERVICE_ROLE`. So are those SvelteKit 3 declares `public: true` in `src/env.js` or `src/env.ts`, where it tells public variables apart instead of by a prefix, those with `PUBLISHABLE` as a part of the name, as `STRIPE_PUBLISHABLE_KEY`, and values in the form Stripe and Supabase issue publishable keys in (`pk_live_`, `pk_test_`, `sb_publishable_`), whatever they are called, with the same exception. A name with `PUBLIC` in it says nothing by itself: Railway puts the outside address of a database, password and all, into `DATABASE_PUBLIC_URL`.
+
+The environment Reaproof runs in is compared the same way, for variables named like a secret (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PRIVATE`, `CREDENTIALS`, `DATABASE_URL`, `CONNECTION_STRING`, `SERVICE_ROLE` as a part of the name), for a database or queue address that carries a password, whatever it is called, and for those named as public, which say what is published on purpose. A CI job or a hosting platform has the build's values there and not in a file, so a check run in the same job after the build sees them. The other variables are the machine's own, and a build writes some into its output on purpose, as a commit hash. A value from the environment is reported as from `environment`, by variable name only.
 
 ## Three ways to use it
 
@@ -248,7 +263,7 @@ npx reaproof
 
 | | What | How |
 | --- | --- | --- |
-| **Web builds** | Next.js, Vite, Create React App, Nuxt and any folder of HTML, JavaScript, CSS and maps | In a project folder the output is picked by name |
+| **Web builds** | Next.js, Vite, Create React App, Nuxt, SvelteKit, Astro, React Router and any folder of HTML, JavaScript, CSS and maps | In a project folder the output is picked by name; of a server-rendering build, what browsers load |
 | **Desktop apps** | Electron apps and their `.asar`, Tauri apps, and Mac apps with every framework and helper inside | A Tauri app's screen code is checked in its project folder |
 | **Mobile apps** | Android `.apk` and `.aab`, React Native bundles and Hermes bytecode, iOS `.ipa`, Flutter builds | See [Android apps](#android-apps) |
 | **Programs** | Mach-O, ELF and PE programs, .NET assemblies, Go and Rust builds, WebAssembly modules | Read without running them; see [Native programs](#native-programs) |
@@ -263,6 +278,7 @@ Not opened yet: `.dmg`, `.pkg`, `.7z`, `.rar`, `.tar.xz` and `.tar.zst`. The rep
 - **`--json` for agents and scripts**: the verdict comes first, and text copied from scanned files is marked as data, not instructions.
 - **`--sarif` for GitHub code scanning**: one rule for each kind of finding, one result for each finding.
 - **`.reaproofignore` for files you know about**, in `.gitignore` patterns. The report names everything it left out.
+- **The build's own secrets, compared.** Run in the same job right after the build, it compares the job's environment variables named like a secret with what ships, as it does values from `.env`, so a token in no known format is found too.
 - **Reads only by default.** `fix` shows the list and asks, keeps a backup outside the project, and `undo` reverses it.
 - **No dependencies. MIT.** Node.js 18.3 or later on Linux, macOS and Windows.
 
@@ -342,7 +358,7 @@ Exit codes: 0 when no leak at the `--fail-on` level or above was found (the leve
 
 Options: `--json` for machine-readable output, `--sarif` for SARIF output from a scan (see "Automatically"), `--yes` to skip the question in `fix` and `measure`, `--fail-on critical|high|medium` for the mildest leak that makes the exit code 1, `--lang ko|en` for the report language. Questions are asked only at a terminal; with `--json`, in a pipe or in CI nothing is asked and nothing is changed.
 
-The path can be a build output folder, a packaged app, a single program, or an archive such as a `.zip`, an `.ipa` or an Electron `.asar`, and it is scanned as given. Only a JavaScript project folder, one with a `package.json`, is searched for its output: Reaproof looks there for `.next/static`, `out`, `dist`, `build`, `release` and `.output/public`, and the report says the folders were picked by name. For a project in another language (a folder with `Package.swift`, an Xcode project, `Cargo.toml`, `go.mod` and the like) it does not guess where the build went. Point it at the thing that ships, for example the `.app`.
+The path can be a build output folder, a packaged app, a single program, or an archive such as a `.zip`, an `.ipa` or an Electron `.asar`, and it is scanned as given. Only a JavaScript project folder, one with a `package.json`, is searched for its output: Reaproof looks there for `.next/static`, `out`, `dist`, `build`, `release` and Nuxt's `.output`, and, when none of them is there, for SvelteKit's own build in `.svelte-kit/output`, which its default adapter leaves alone on a machine that is not the platform it deploys to; the report says the folders were picked by name. Of a server-rendering build, one with `client` or `public` beside `server`, as SvelteKit's Node adapter, React Router, Astro and Nuxt write it, only that half and SvelteKit's `prerendered` pages are read, also when the build folder is pointed at. The report names such a build, and the JSON lists it in `serverBuilds`. An Electron or Tauri project is read whole, since all of its output, a server in it too, is installed on the user's machine. Out of its server code, what the server puts into every page is read as browser code: the scripts Astro puts into the pages it renders, and the public part of Nuxt's runtime config. The report names them, and the JSON lists them in `serverSent`, each as the file it sits in, `:/`, and what it is. Where they are not found in the form the releases tried here write them, the report says they were not read, and the JSON lists the build in `serverSentUnread`. For a project in another language (a folder with `Package.swift`, an Xcode project, `Cargo.toml`, `go.mod` and the like) it does not guess where the build went. Point it at the thing that ships, for example the `.app`.
 
 ## How files are read
 
@@ -419,7 +435,7 @@ Not measured: what rea reads with a disassembler behind it (Hopper, Ghidra or ID
 
 The fix moves standalone `.map` files out of the build output into `~/.reaproof/backups/`, outside your project, so a backup is never deployed by accident. It never edits your code files, because changing them would break integrity hashes. `reaproof undo` moves the files back. A map that cannot be moved, because its folder is locked or another program holds it, is left where it is and named, the others are still moved, and the rating after the fix counts what was left.
 
-The next build creates the maps again unless you turn them off. The report tells you which setting to change for Next.js, Vite and Create React App.
+The next build creates the maps again unless you turn them off. The report tells you which setting to change for Next.js, Vite, Create React App, Nuxt and Astro.
 
 If a hosting platform builds your project from the repository, a local fix does not reach what gets deployed. Change the build setting, deploy, and check the deployed site.
 
@@ -453,6 +469,8 @@ It runs one fixed release of rea, 6.5.0, the one this version was tested against
 - Dependencies in folders other than `node_modules`, `site-packages` and `dist-packages`. A Ruby gem folder or a copied-in library is read like your own files, so the notes, scripts and test keys of the libraries in it are reported as if they were yours.
 - Public-variable prefixes other than the nine listed above.
 - Very large files. A code or text file over 30 MB is searched for keys and `.env` values alone, and the report names it: a map appended to its code is not read, nor are the other checks of the table above made. Any file over 512 MB inside an archive and any other file over 1 GB are not read, and the report counts them as skipped. A source map over 30 MB is reported, without the count of its files.
+- Values a server puts into its pages from its environment while it runs: SvelteKit 3's public variables that are not declared `static`, and Nuxt's runtime config where an environment variable sets it on the server. They are not in the build, and the check of a deployed site looks for maps only.
+- The browser build of Remix's classic compiler, which it writes to `public/build`, apart from its server in `build`. React Router's, which replaced it, is read.
 - `!` lines in `.reaproofignore`, which in `.gitignore` take a file back in. Here what a pattern leaves out stays out. A pattern with a `/` or `**` in it is not matched against a path longer than 1,024 characters, which only an archive made to cost time holds; what lies there is read.
 
 ## Development

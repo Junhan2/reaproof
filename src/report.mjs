@@ -10,7 +10,7 @@ import {
   STANDALONE_MAP_RULES,
   worstSeverity,
 } from './rules.mjs';
-import { countLeftUnread, toDisplayPath } from './scan.mjs';
+import { APP_FRAMEWORKS, countLeftUnread, toDisplayPath } from './scan.mjs';
 
 const MAX_LISTED_PATHS = 5;
 const MAX_LISTED_ADDRESSES = 10;
@@ -22,8 +22,6 @@ const ISSUES_URL = 'https://github.com/Junhan2/reaproof/issues';
 // and painted by these same strings.
 const RISK_ARROW = ' → ';
 const LEVEL_SEPARATOR = ' · ';
-// Projects that make an app to install, whose output is no website to check at an address.
-const APP_FRAMEWORKS = ['electron', 'tauri'];
 // The numbers of one file a rule's explanation speaks of: the file with the most of them.
 const FULLEST_COUNTS = ['names', 'types', 'members', 'ownFiles', 'dependencyFiles', 'functions', 'dependencies', 'methods', 'ownClasses', 'namedClasses', 'strings'];
 // Terminal styles by the names Node's own `util.inspect.colors` gives them.
@@ -61,6 +59,7 @@ const KO = {
   },
   levelsLabel: '단계',
   andMore: (count) => `외 ${count}개`,
+  fromEnvironment: '실행 환경',
   originals: (names) => `원본: ${names}`,
   notSigned: '서명 없음',
   namesIn: (architecture, count) => `${architecture}: 이름 ${count}개`,
@@ -103,7 +102,7 @@ const KO = {
       ],
     },
     'env-value': {
-      title: '.env 의 비밀 값이 배포물에 그대로 들어 있습니다',
+      title: '.env 나 실행 환경의 비밀 값이 배포물에 그대로 들어 있습니다',
       body: () => [
         '아래 변수의 값이 사용자에게 내려가는 파일 안에서 발견됐습니다.',
         '이미 노출됐다고 보고 발급처에서 값을 바꾸세요. 그 값이 필요한 호출은 내 서버를 거치게 하세요.',
@@ -318,6 +317,7 @@ const KO = {
     'aws-access-key': 'AWS 접근 열쇠',
     'private-key': '개인 키',
     'ai-api-key': 'AI 서비스 API 열쇠',
+    'gemini-key': 'Gemini API 열쇠(Gemini 를 부르는 화면 코드 속 Google 열쇠)',
     'connection-string': '비밀번호가 든 접속 주소',
     'xai-key': 'xAI API 열쇠',
     'groq-key': 'Groq API 열쇠',
@@ -389,6 +389,8 @@ const KO = {
     next: 'Next.js: next.config 에서 productionBrowserSourceMaps: true 를 지우세요. 기본값은 꺼짐입니다.',
     vite: "Vite: vite.config 의 build.sourcemap 을 false 로 두세요. 'hidden' 으로 둬도 지도 파일은 결과물에 남습니다.",
     cra: 'Create React App: 빌드할 때 GENERATE_SOURCEMAP=false 를 주세요.',
+    astro: 'Astro: astro.config 의 vite.build.sourcemap 을 false 로 두세요.',
+    nuxt: "Nuxt: nuxt.config 의 sourcemap.client 를 기본값인 false 로 두세요. 'hidden' 으로 둬도 지도 파일은 결과물에 남습니다.",
   },
   genericHint: '빌드 도구 설정에서 출시용 source map 생성을 끄세요.',
   errorTrackerHint: '오류 추적 서비스에 지도를 올려야 한다면, 올린 뒤 배포물에서는 지우세요.',
@@ -410,6 +412,11 @@ const KO = {
   keysOnlyFiles: (count, names) =>
     `30MB 가 넘어 열쇠와 .env 값만 찾은 파일 ${count}개(${names}): 코드 끝에 붙은 지도 같은 나머지 점검은 하지 않았습니다.`,
   ignored: (count, names) => `.reaproofignore 에 적힌 대로 읽지 않은 것 ${count}개(${names})`,
+  serverCode: (count, names) =>
+    `서버 렌더링 빌드 ${count}개(${names})는 브라우저가 받는 부분만 읽었습니다. 나머지는 서버에서만 도는 코드라 읽지 않았습니다.`,
+  serverSent: (count, names) => `서버가 페이지에 실어 보내는 것 ${count}개는 서버 코드에서 꺼내 읽었습니다(${names}).`,
+  serverSentUnread: (count, names) =>
+    `서버 렌더링 빌드 ${count}개(${names})에서 서버가 페이지에 실어 보내는 것(Astro 의 페이지 스크립트, Nuxt 의 공개 실행 설정)을 찾지 못해 읽지 않았습니다. 이 도구가 아직 모르는 판일 수 있습니다.`,
   unopenedContainers: (count, names) =>
     `열지 못한 꾸러미 ${count}개(${names}): 이 종류는 안을 읽지 못합니다. 안에 든 앱이나 폴더를 꺼내 직접 가리켜 주세요.`,
   nestedTooDeep: (count, names) =>
@@ -552,6 +559,7 @@ const EN = {
   },
   levelsLabel: 'Levels',
   andMore: (count) => `and ${count} more`,
+  fromEnvironment: 'environment',
   originals: (names) => `originals: ${names}`,
   notSigned: 'not signed',
   namesIn: (architecture, count) => `${architecture}: ${count} names`,
@@ -593,7 +601,7 @@ const EN = {
       ],
     },
     'env-value': {
-      title: 'A secret value from .env is inside what you ship',
+      title: 'A secret value from .env or the environment is inside what you ship',
       body: () => [
         'The value of each variable below was found in a file that is delivered to users.',
         'Treat it as leaked and change it where it was issued. Route the calls that need it through your own server.',
@@ -812,6 +820,7 @@ const EN = {
     'aws-access-key': 'AWS access key',
     'private-key': 'Private key',
     'ai-api-key': 'AI service API key',
+    'gemini-key': 'Gemini API key (a Google key in browser code that calls Gemini)',
     'connection-string': 'Connection address with a password',
     'xai-key': 'xAI API key',
     'groq-key': 'Groq API key',
@@ -883,6 +892,8 @@ const EN = {
     next: 'Next.js: remove productionBrowserSourceMaps: true from next.config. It is off by default.',
     vite: "Vite: keep build.sourcemap at false in vite.config. 'hidden' still writes the map files into the output.",
     cra: 'Create React App: build with GENERATE_SOURCEMAP=false.',
+    astro: 'Astro: keep vite.build.sourcemap at false in astro.config.',
+    nuxt: "Nuxt: keep sourcemap.client at false in nuxt.config, as it is by default. 'hidden' still writes the map files into the output.",
   },
   genericHint: 'Turn off production source maps in your build tool settings.',
   errorTrackerHint: 'If an error tracker needs the maps, upload them there and then delete them from the output.',
@@ -905,6 +916,11 @@ const EN = {
   keysOnlyFiles: (count, names) =>
     `Files over 30 MB, searched for keys and .env values only: ${count} (${names}). The other checks, such as for a map appended to the code, were not made.`,
   ignored: (count, names) => `Not read, as .reaproofignore says: ${count} (${names})`,
+  serverCode: (count, names) =>
+    `Of ${count} server-rendering build(s) (${names}), only what browsers load was read. The rest is code that runs on your server.`,
+  serverSent: (count, names) => `Read out of the server code, because the server puts it into the pages it sends: ${count} (${names})`,
+  serverSentUnread: (count, names) =>
+    `In ${count} server-rendering build(s) (${names}), what the server puts into its pages (Astro's page scripts, Nuxt's public runtime config) was not found, and was not read. This may be a release this scanner does not know yet.`,
   unopenedContainers: (count, names) =>
     `Containers that could not be opened: ${count} (${names}). This scanner does not read inside this kind. Take out the app or folder inside and point at that.`,
   nestedTooDeep: (count, names) =>
@@ -1059,7 +1075,7 @@ export function createReporter(language) {
 
   function describeFinding({ rule, path, detail }) {
     if (rule === 'secret') return `${path}: ${t.secretLabels[detail.secretId]} ${detail.redacted}`;
-    if (rule === 'env-value') return `${detail.variable} (${detail.envFile}) → ${path}`;
+    if (rule === 'env-value') return `${detail.variable} (${detail.envFile ?? t.fromEnvironment}) → ${path}`;
     if (rule === 'stray-file') return `${path} (${t.strayKinds[detail.kind]})`;
     if (rule === 'electron-fuse') return `${path}: ${detail.enabled.join(', ')}`;
     if (rule === 'electron-asar-integrity') return `${path}: ${detail.disabled.join(', ')}`;
@@ -1139,6 +1155,17 @@ export function createReporter(language) {
     return { addresses, totals };
   }
 
+  /** What of a server-rendering build was read: the part browsers load, and what its server puts into pages. */
+  function listServerParts(result) {
+    const lines = [];
+    if (result.serverBuilds.length > 0) {
+      const builds = result.serverBuilds.map((build) => toDisplayPath(result.root, build));
+      lines.push(t.serverCode(builds.length, named(builds)));
+    }
+    if (result.serverSent.length > 0) lines.push(t.serverSent(result.serverSent.length, named(result.serverSent)));
+    return lines;
+  }
+
   /** What was met and could not be read. It changes how everything after it reads, so it comes first. */
   function listUnread(result) {
     const unread = [];
@@ -1149,6 +1176,9 @@ export function createReporter(language) {
     if (result.nestedTooDeep.length > 0) unread.push(t.nestedTooDeep(result.nestedTooDeep.length, named(result.nestedTooDeep)));
     if (result.unreadScreenCode.length > 0) {
       unread.push(t.unreadScreenCode(result.unreadScreenCode.length, named(result.unreadScreenCode)));
+    }
+    if (result.serverSentUnread.length > 0) {
+      unread.push(t.serverSentUnread(result.serverSentUnread.length, named(result.serverSentUnread)));
     }
     if (result.unreadableArchives.length > 0) {
       unread.push(t.unreadableArchives(result.unreadableArchives.length, named(result.unreadableArchives)));
@@ -1230,7 +1260,7 @@ export function createReporter(language) {
   function nextSteps(result) {
     const leftUnread =
       result.risk === 'unrated' ||
-      [result.unopenedContainers, result.nestedTooDeep, result.unreadScreenCode, result.unreadableFolders].some(
+      [result.unopenedContainers, result.nestedTooDeep, result.unreadScreenCode, result.serverSentUnread, result.unreadableFolders].some(
         (paths) => paths.length > 0,
       );
     const steps = leftUnread && !result.isDeployed ? [t.next.unread] : [];
@@ -1241,7 +1271,8 @@ export function createReporter(language) {
     // JavaScript read with no program or archive around it, from no project that makes an
     // app to install, is a website's output.
     const isWebsite =
-      !result.frameworks.some((framework) => APP_FRAMEWORKS.includes(framework)) &&
+      // A project that makes an app to install has no website to check at an address.
+      !result.frameworks.some((framework) => APP_FRAMEWORKS.has(framework)) &&
       result.scriptsScanned > 0 &&
       result.programsScanned === 0 &&
       result.archivesOpened === 0;
@@ -1309,7 +1340,7 @@ export function createReporter(language) {
       const lines = [
         result.targetsPickedByName ? `${t.target(targets)} ${t.pickedByName}` : t.target(targets),
         asides.length > 0 ? `${scanned} (${asides.join(', ')})` : scanned,
-        ...indent(listUnread(result)),
+        ...indent([...listServerParts(result), ...listUnread(result)]),
         '',
         riskOpening + t.riskLevels[result.risk],
         ...(result.risk === 'unrated' ? [] : [levelsLine(result.risk)]),

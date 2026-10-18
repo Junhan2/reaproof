@@ -1,6 +1,6 @@
 import { checkEndpoints, checkPromptCandidates, checkUnminifiedCode } from './checks/content.mjs';
 import { checkDeveloperFile, checkStrayFile, checkUnshippedSource } from './checks/paths.mjs';
-import { checkSecrets } from './checks/secrets.mjs';
+import { checkBrowserGeminiKeys, checkSecrets } from './checks/secrets.mjs';
 import { checkInlineMaps, checkMapFile } from './checks/sourcemaps.mjs';
 
 export { SOURCE_MAP_RULES, STANDALONE_MAP_RULES } from './checks/sourcemaps.mjs';
@@ -116,6 +116,7 @@ export function checkFile({ path, extension, text }) {
   const findings = [];
   if (CODE_EXTENSIONS.has(extension)) findings.push(...checkInlineMaps(path, text));
   if (SECRET_SCAN_EXTENSIONS.has(extension)) findings.push(...checkSecrets(path, text));
+  if (SCRIPT_EXTENSIONS.has(extension) || extension === '.html') findings.push(...checkBrowserGeminiKeys(path, text));
   if (SCRIPT_EXTENSIONS.has(extension)) {
     findings.push(
       ...checkUnminifiedCode(path, text),

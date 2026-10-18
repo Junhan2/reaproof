@@ -34,13 +34,57 @@ const MAX_PROMPT_LENGTH = 6000;
 const MIN_PROMPT_SPACES = 20;
 const PROMPT_PREVIEW_LENGTH = 60;
 
-/** Code that kept its names and line breaks reads as written. */
+/**
+ * Code that kept its names and line breaks reads as written. The line breaks of a template
+ * literal are text, which a minifier keeps as it is: SvelteKit's error page, an HTML page in
+ * one, sits in every build it makes. So a file that reads as written is measured again
+ * without what its template literals hold, when its backticks pair up. One that does not
+ * pair up has a backtick in a string, a comment or a pattern, as `split('```')` has, which
+ * pairing would read wrong, and the file is taken as it is.
+ */
 export function checkUnminifiedCode(path, text) {
+  if (!readsAsWritten(text)) return [];
+  const backticks = countOf(text, '`');
+  const code = backticks > 0 && backticks % 2 === 0 ? withoutTemplateText(text) : text;
+  if (code !== text && !readsAsWritten(code)) return [];
+  const averageLineLength = Math.round(code.length / countLines(code));
+  return [{ rule: 'unminified-code', severity: 'medium', path, detail: { averageLineLength } }];
+}
+
+function readsAsWritten(text) {
   const lineCount = countLines(text);
   const averageLineLength = Math.round(text.length / lineCount);
-  if (lineCount < MIN_HANDWRITTEN_LINES || averageLineLength >= MAX_HANDWRITTEN_LINE_LENGTH) return [];
-  if (!holdsCode(text)) return [];
-  return [{ rule: 'unminified-code', severity: 'medium', path, detail: { averageLineLength } }];
+  return lineCount >= MIN_HANDWRITTEN_LINES && averageLineLength < MAX_HANDWRITTEN_LINE_LENGTH && holdsCode(text);
+}
+
+function countOf(text, character) {
+  let count = 0;
+  for (let index = text.indexOf(character); index !== -1; index = text.indexOf(character, index + 1)) count += 1;
+  return count;
+}
+
+/** The text with what each template literal holds taken out. Found with `indexOf`, as a literal can run for megabytes. */
+function withoutTemplateText(text) {
+  const kept = [];
+  let from = 0;
+  let open = text.indexOf('`');
+  while (open !== -1) {
+    let close = text.indexOf('`', open + 1);
+    while (close !== -1 && isEscaped(text, close)) close = text.indexOf('`', close + 1);
+    // A literal that is never closed is kept as it is, with what comes after it.
+    if (close === -1) break;
+    kept.push(text.slice(from, open + 1));
+    from = close;
+    open = text.indexOf('`', close + 1);
+  }
+  kept.push(text.slice(from));
+  return kept.join('');
+}
+
+function isEscaped(text, position) {
+  let backslashes = 0;
+  while (text[position - 1 - backslashes] === '\\') backslashes += 1;
+  return backslashes % 2 === 1;
 }
 
 function holdsCode(text) {
@@ -93,9 +137,7 @@ export function checkPromptCandidates(path, text) {
 }
 
 function countLines(text) {
-  let lines = 1;
-  for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1)) lines += 1;
-  return lines;
+  return countOf(text, '\n') + 1;
 }
 
 function looksLikeApi(address) {

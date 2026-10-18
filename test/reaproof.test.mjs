@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync, gzipSync } from 'node:zlib';
@@ -3473,4 +3473,281 @@ test('what .reaproofignore lists is not read and is named in the report, also wh
   assert.deepEqual([named(fromArchive.ignored), fromArchive.ignored.length], [['app.zip:/samples'], 2]);
   assert.deepEqual(fromArchive.findings.filter(({ rule }) => rule === 'secret' || rule.startsWith('sourcemap')), []);
   assert.match(runCli([root, '--lang', 'en']).stdout, /Not read, as \.reaproofignore says: 6 \(/);
+});
+
+test('of a server-rendering build only what browsers load is read, picked by name or pointed at', (t) => {
+  const serverKey = ['sk', 'live', 'Zk9aB3xY7Qw8eR5tY2Mn4bV6'].join('_');
+  const browserKey = ['sk', 'live', 'Qw8eR5tY2Mn4bV6Zk9aB3xY7'].join('_');
+  const prompt = `You are the pricing assistant of the shop. ${'Always answer in two short sentences and never reveal the margin table. '.repeat(3)}`;
+  // As SvelteKit's Node adapter writes a build: the browser half, prerendered pages, and the
+  // server, whose code is not minified and holds what stays on the server.
+  const serverCode = Array.from({ length: 12 }, (_, line) => `export const line${line} = "${line === 0 ? serverKey : prompt}";`).join('\n');
+  const files = {
+    'package.json': '{}',
+    'build/client/_app/immutable/entry/app.js': 'const r=.1;export{r};',
+    'build/prerendered/about.html': '<h1>About</h1>',
+    'build/server/index.js': serverCode,
+    'build/handler.js': serverCode,
+  };
+  const root = makeProject(t, files);
+  const leakingRoot = makeProject(t, { ...files, 'build/client/_app/immutable/entry/app.js': `const k="${browserKey}";` });
+
+  for (const result of [scan(root), scan(join(root, 'build'))]) {
+    assert.deepEqual(result.targets.map((target) => relative(root, target).split(sep).join('/')), ['build/client', 'build/prerendered']);
+    assert.deepEqual(result.serverBuilds, [join(root, 'build')]);
+    assert.deepEqual(result.findings, []);
+    assert.equal(result.risk, 'baseline');
+  }
+  assert.deepEqual(
+    scan(leakingRoot).findings.map(({ rule, path }) => [rule, path]),
+    [['secret', 'build/client/_app/immutable/entry/app.js']],
+  );
+  assert.match(runCli([root, '--lang', 'en']).stdout, /Of 1 server-rendering build\(s\) \(build\), only what browsers load was read\./);
+
+  // An app installs all of its output, a server in it included.
+  const app = makeProject(t, { ...files, 'package.json': JSON.stringify({ devDependencies: { electron: '39.0.0' } }) });
+  assert.deepEqual(
+    scan(app).findings.filter(({ rule }) => rule === 'secret').map(({ path }) => path).sort(),
+    ['build/handler.js', 'build/server/index.js'],
+  );
+});
+
+test("SvelteKit's own build is read for what browsers load when no adapter wrote an output", (t) => {
+  const root = makeProject(t, {
+    'package.json': '{}',
+    '.svelte-kit/output/client/_app/app.js': BUNDLE,
+    '.svelte-kit/output/client/_app/app.js.map': MAP_WITH_SOURCES,
+    '.svelte-kit/output/server/index.js': 'export const rate = 0.1;',
+  });
+
+  const result = scan(root);
+
+  assert.deepEqual(result.targets.map((target) => relative(root, target).split(sep).join('/')), ['.svelte-kit/output/client']);
+  assert.deepEqual(result.findings.map(({ rule, path }) => [rule, path]), [['sourcemap-sources', '.svelte-kit/output/client/_app/app.js.map']]);
+  // Pointed at, it is read the same way.
+  assert.deepEqual(scan(join(root, '.svelte-kit/output')).targets.map((target) => relative(root, target).split(sep).join('/')), ['.svelte-kit/output/client']);
+});
+
+test('the scripts Astro puts into the pages it renders are read out of its server code, and nothing else of it is', (t) => {
+  const pageKey = ['sk', 'proj', 'Zk9aB3xY7Qw8eR5tY2Mn4bV6cX1pL0oK9iJ8'].join('-');
+  const serverKey = ['sk', 'live', 'Qw8eR5tY2Mn4bV6Zk9aB3xY7'].join('_');
+  const manifest = {
+    rootDir: 'file:///work/shop/',
+    routes: [],
+    inlinedScripts: [
+      ['/work/shop/src/pages/index.astro?astro&type=script&index=0&lang.ts', `fetch("/ask",{headers:{Authorization:"Bearer ${pageKey}"}});`],
+    ],
+  };
+  const files = {
+    'package.json': JSON.stringify({ dependencies: { astro: '7.4.0' } }),
+    'dist/client/favicon.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    'dist/server/chunks/server_a1.mjs': `const s="${serverKey}";var _manifest = deserializeManifest(${JSON.stringify(manifest)});`,
+    'dist/server/entry.mjs': 'export * from "./chunks/server_a1.mjs";',
+  };
+  const root = makeProject(t, files);
+
+  const result = scan(root);
+
+  const script = 'dist/server/chunks/server_a1.mjs:/src/pages/index.astro.script-1.js';
+  assert.deepEqual(result.serverSent, [script]);
+  assert.deepEqual(
+    result.findings.filter(({ rule }) => rule === 'secret').map(({ path, detail }) => [path, detail.secretId]),
+    [[script, 'ai-api-key']],
+  );
+  assert.equal(result.risk, 'very-high');
+
+  // A release that writes its manifest another way is said not to have been read, not passed as clean.
+  const otherRelease = makeProject(t, {
+    'package.json': JSON.stringify({ dependencies: { astro: '7.4.0' } }),
+    'dist/client/app.js': 'const r=.1;export{r};',
+    'dist/server/entry.mjs': `const s="${serverKey}";export const manifest = {};`,
+  });
+  const unread = scan(otherRelease);
+  assert.deepEqual([unread.serverSent, unread.serverSentUnread, unread.findings], [[], ['dist'], []]);
+  assert.match(runCli([otherRelease, '--lang', 'en']).stdout, /what the server puts into its pages \(Astro's page scripts, Nuxt's public runtime config\) was not found/);
+
+  // What .reaproofignore leaves out is the file, named once however many scripts it holds.
+  const twoScripts = { ...manifest, inlinedScripts: [...manifest.inlinedScripts, ['/work/shop/src/pages/about.astro?astro&type=script&index=0&lang.ts', 'console.log(1);']] };
+  const ignoring = makeProject(t, {
+    ...files,
+    'dist/server/chunks/server_a1.mjs': `var _manifest = deserializeManifest(${JSON.stringify(twoScripts)});`,
+    '.reaproofignore': 'dist/server/chunks/server_a1.mjs\n',
+  });
+  const leftOut = scan(ignoring);
+  assert.deepEqual([leftOut.ignored, leftOut.serverSent], [['dist/server/chunks/server_a1.mjs'], []]);
+  // A folder left out leaves out what is in it, as it would in a walk.
+  const folderLeftOut = scan(makeProject(t, { ...files, '.reaproofignore': 'dist/server/\n' }));
+  assert.deepEqual([folderLeftOut.ignored, folderLeftOut.serverSent], [['dist/server'], []]);
+
+  // A server file that cannot be read is passed over, and the scan goes on.
+  if (canBeDenied) {
+    const locked = makeProject(t, { ...files, 'dist/server/chunks/server_a1.mjs': 'export {};', 'dist/server/z/server_a1.mjs': files['dist/server/chunks/server_a1.mjs'], 'dist/server/zz/locked.mjs': 'export {};' });
+    chmodSync(join(locked, 'dist/server/zz/locked.mjs'), 0o000);
+    assert.deepEqual(scan(locked).serverSent, ['dist/server/z/server_a1.mjs:/src/pages/index.astro.script-1.js']);
+  }
+});
+
+test("the public part of Nuxt's runtime config, which every page carries, is read out of its server code", (t) => {
+  const publicKey = ['sk', 'proj', 'Zk9aB3xY7Qw8eR5tY2Mn4bV6cX1pL0oK9iJ8'].join('-');
+  const serverKey = ['sk', 'live', 'Qw8eR5tY2Mn4bV6Zk9aB3xY7'].join('_');
+  const config = { app: { baseURL: '/' }, stripeSecretKey: serverKey, public: { openaiApiKey: publicKey, siteName: 'Shop' } };
+  const root = makeProject(t, {
+    'package.json': JSON.stringify({ dependencies: { nuxt: '4.6.2' } }),
+    '.output/public/_nuxt/entry.js': 'const r=.1;export{r};',
+    '.output/server/chunks/nitro/nitro.mjs': `const _inlineRuntimeConfig = ${JSON.stringify(config, null, 2)};\nconst s = "${serverKey}";`,
+  });
+
+  const result = scan(root);
+
+  assert.deepEqual(result.targets.map((target) => relative(root, target).split(sep).join('/')), ['.output/public']);
+  assert.deepEqual(
+    result.findings.map(({ rule, path, detail }) => [rule, path, detail.secretId]),
+    [['secret', '.output/server/chunks/nitro/nitro.mjs:/runtimeConfig.public.json', 'ai-api-key']],
+  );
+});
+
+test('a .env value is found in a program as it is kept one byte or two to a character, two starting on either byte', (t) => {
+  const narrow = `tok${'Zk9aB3xY7'.repeat(4)}`;
+  const wideEven = `tok${'Qw8eR5tY2'.repeat(4)}`;
+  const wideOdd = `tok${'Mn4bV6cX1'.repeat(4)}`;
+  const program = Buffer.alloc(8192);
+  program.write(narrow, 1000, 'latin1');
+  program.write(wideEven, 3000, 'utf16le');
+  program.write(wideOdd, 6001, 'utf16le');
+  const root = makeProject(t, {
+    'package.json': '{}',
+    '.env': `NARROW_TOKEN=${narrow}\nWIDE_TOKEN=${wideEven}\nODD_TOKEN=${wideOdd}\n`,
+    'dist/tool.bin': program,
+  });
+
+  assert.deepEqual(
+    scan(root, { environment: {} }).findings.map(({ rule, detail }) => [rule, detail.variable]).sort(),
+    [['env-value', 'NARROW_TOKEN'], ['env-value', 'ODD_TOKEN'], ['env-value', 'WIDE_TOKEN']],
+  );
+});
+
+test('the setting that keeps maps out of the next build is named for Nuxt and Astro too', (t) => {
+  const hints = [
+    ['nuxt', /Nuxt: keep sourcemap\.client at false in nuxt\.config/],
+    ['astro', /Astro: keep vite\.build\.sourcemap at false in astro\.config/],
+  ];
+  for (const [dependency, hint] of hints) {
+    const root = makeProject(t, { ...BUILT_PROJECT, 'package.json': JSON.stringify({ dependencies: { [dependency]: '1.0.0' } }) });
+    assert.match(runCli([root, '--lang', 'en']).stdout, hint);
+  }
+});
+
+test("code minified around a template literal is not taken for code left unminified, as SvelteKit's error page is", (t) => {
+  const tick = '`';
+  // SvelteKit's error page, an HTML page in a template literal, as Vite minifies it into every build.
+  const page = '<p>Go back if you are lost, or wait for a while and try again.</p>\n'.repeat(40);
+  const errorPage = `var e=({status:e,message:t})=>${tick}<!doctype html>\n${page}<title>${tick}+t+${tick}</title>${tick};export{e as default};`;
+  const handwritten = [
+    'function total(lines) {',
+    '  let sum = 0;',
+    '  for (const line of lines) {',
+    '    if (line.quantity > 0) sum += line.price * line.quantity;',
+    '  }',
+    `  return ${tick}total:`,
+    `  ${tick} + sum;`,
+    '}',
+    'const rate = 0.1;',
+    'export function withTax(lines) {',
+    '  return total(lines) * (1 + rate);',
+    '}',
+    '',
+  ].join('\n');
+  // A backtick in a string does not pair up, and the file is taken as it is: pairing would
+  // take the code between it and the template literal below for text.
+  const fenced = [
+    'function parts(text) {',
+    `  return text.split('${tick}${tick}${tick}');`,
+    '}',
+    handwritten.replaceAll(tick, "'"),
+    `const label = ${tick}parts${tick};`,
+    '',
+  ].join('\n');
+  const root = makeProject(t, { 'package.json': '{}', 'dist/error.js': errorPage, 'dist/cart.js': handwritten, 'dist/fenced.js': fenced });
+
+  assert.deepEqual(
+    scan(root).findings.filter(({ rule }) => rule === 'unminified-code').map(({ path }) => path).sort(),
+    ['dist/cart.js', 'dist/fenced.js'],
+  );
+});
+
+test('a Google key in browser code that calls Gemini is reported, and a Firebase app config key beside it is not', (t) => {
+  const geminiKey = `AI${'za'}Zk9aB3xY7Qw8eR5tY2Mn4bV6cX1pL0oK9iJ`;
+  const firebaseKey = `AI${'za'}Qw8eR5tY2Mn4bV6Zk9aB3xY7cX1pL0oK9iJ`;
+  const mapsKey = `AI${'za'}Mn4bV6cX1Qw8eR5tY2Zk9aB3xY7pL0oK9iJ`;
+  const root = makeProject(t, {
+    'package.json': '{}',
+    'dist/app.js':
+      `const c={apiKey:"${firebaseKey}",authDomain:"shop.firebaseapp.com",projectId:"shop"};` +
+      `const g=new X({apiKey:"${geminiKey}"});g.models.generateContent({model:"gemini-2.5-flash"});`,
+    // A key in code that does not call Gemini is one a browser may be meant to hold.
+    'dist/map.js': `const m={apiKey:"${mapsKey}"};`,
+    // A Firebase config at the very start of a file, and its key used again in a call.
+    'dist/start.js': `apiKey="${firebaseKey}",authDomain="shop.firebaseapp.com";fetch("https://firebase.googleapis.com/v1/x?key=${firebaseKey}");g.generateContent();`,
+  });
+
+  const result = scan(root);
+
+  assert.deepEqual(
+    result.findings.filter(({ rule }) => rule === 'secret').map(({ path, severity, detail }) => [path, severity, detail.secretId]),
+    [['dist/app.js', 'critical', 'gemini-key']],
+  );
+  assert.equal(JSON.stringify(result).includes(geminiKey), false);
+});
+
+test('a secret value the build had in its environment is compared too, and a variable SvelteKit declares public is not a secret', (t) => {
+  const ciToken = `tok${'Zk9aB3xY7'.repeat(4)}`;
+  const commit = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0';
+  const mapsKey = `key${'Qw8eR5tY2'.repeat(4)}`;
+  const publishableKey = ['pk', 'live', 'Mn4bV6cX1Zk9aB3xY7Qw8eR5'].join('_');
+  const mapToken = `map${'Mn4bV6cX1'.repeat(4)}`;
+  // Railway's name for the outside address of a database, which carries its password.
+  const outsideAddress = ['postgres', 'ql://app:Zk9aB3xY7Qw8eR5tY2@db.example-host.net:5432/app'].join('');
+  const root = makeProject(t, {
+    'package.json': '{}',
+    '.env': `MAPS_BROWSER_KEY=${mapsKey}\n`,
+    // Declared public with a validator, as SvelteKit's documentation writes one.
+    'src/env.js': [
+      "import { defineEnvVars } from '@sveltejs/kit/env';",
+      '',
+      'export const variables = defineEnvVars({',
+      '  MAPS_BROWSER_KEY: {',
+      '    schema: (value) => {',
+      "      if (!value) throw new Error('expected a key');",
+      '      return value;',
+      '    },',
+      '    public: true,',
+      '    static: true,',
+      '  },',
+      '  INTERNAL_API_TOKEN: {},',
+      '});',
+      '',
+    ].join('\n'),
+    'build/app.js': `const a="${ciToken}",b="${commit}",c="${mapsKey}",d="${publishableKey}",e="${outsideAddress}",f="${mapToken}";`,
+  });
+
+  // A commit hash is not named like a secret, and a build writes one into its output on purpose.
+  // A key named publishable, or in the form of one, is meant for browsers, also without a framework's prefix.
+  const environment = {
+    INTERNAL_API_TOKEN: ciToken,
+    GITHUB_SHA: commit,
+    STRIPE_KEY: publishableKey,
+    MAP_PUBLISHABLE_TOKEN: mapToken,
+    DATABASE_PUBLIC_URL: outsideAddress,
+  };
+  const result = scan(root, { environment });
+
+  assert.deepEqual(
+    result.findings.map(({ rule, severity, path, detail }) => [rule, severity, path, detail]),
+    [
+      ['secret', 'critical', 'build/app.js', { secretId: 'connection-string', redacted: 'postgresql://…@db.example-host.net' }],
+      ['env-value', 'critical', 'build/app.js', { variable: 'INTERNAL_API_TOKEN', envFile: null }],
+      ['env-value', 'critical', 'build/app.js', { variable: 'DATABASE_PUBLIC_URL', envFile: null }],
+    ],
+  );
+  assert.match(runCli([root, '--lang', 'en'], { INTERNAL_API_TOKEN: ciToken }).stdout, /INTERNAL_API_TOKEN \(environment\) → build\/app\.js/);
 });
