@@ -1267,6 +1267,25 @@ test('the command checks an address and refuses to fix one', async (t) => {
   assert.deepEqual(site.requested, ['/', '/app.js', '/app.js.map']);
 });
 
+test('the JSON of an address tells an agent why nothing is fixed there, what was checked and what to do next', async (t) => {
+  const site = await startSite(t, {
+    '/': '<script src="/app.js"></script>',
+    '/app.js': BUNDLE,
+    '/app.js.map': MAP_WITH_SOURCES,
+  });
+  const terminal = makeTerminal({ answers: [true] });
+
+  const exitCode = await main([site.address, '--json', '--lang', 'en'], terminal);
+
+  const { explain } = JSON.parse(terminal.printed.join('\n'));
+  assert.equal(exitCode, 1);
+  assert.equal(explain.rules['sourcemap-sources'].fixCommand, null);
+  assert.match(explain.rules['sourcemap-sources'].fixInstead, /cannot be fixed from here/);
+  assert.match(explain.limits.at(-1), /deployed source maps only/);
+  assert.deepEqual(explain.next, ['Turn source maps off in the build settings, deploy again, and check this address again.']);
+  assert.deepEqual(terminal.questions, []);
+});
+
 test('a deployed map larger than a code file is read a stretch at a time, and one past the limit is skipped without being downloaded', async (t) => {
   const largeMap = JSON.stringify({
     version: 3,
