@@ -26,12 +26,18 @@ try {
   console.log(`::warning::The npm download count was not added: ${error.message}`);
 }
 
-/** The page with the count in place and its line shown; every part must be found once. */
+/**
+ * The page with the count in place and its line shown; every part must be found once. The number
+ * says how many characters it has (--digits), so its box holds that width while it counts up.
+ */
 function withDownloads(page, downloads) {
   const shown = downloads.toLocaleString('en-US');
   const swaps = [
-    ['<div class="wrap" data-downloads hidden>', '<div class="wrap" data-downloads>'],
-    ['<span data-count aria-hidden="true"></span>', `<span data-count="${downloads}" aria-hidden="true">${shown}</span>`],
+    ['<p class="downloads" data-downloads hidden>', '<p class="downloads" data-downloads>'],
+    [
+      '<span class="downloads-n" data-count aria-hidden="true"></span>',
+      `<span class="downloads-n" data-count="${downloads}" aria-hidden="true" style="--digits: ${shown.length}">${shown}</span>`,
+    ],
     ['<span class="sr-only" data-count-text></span>', `<span class="sr-only">${shown}</span>`],
   ];
   return swaps.reduce((text, [from, to]) => {

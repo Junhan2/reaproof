@@ -520,6 +520,25 @@ kbd {
   margin: -1px -1px -1px 0;
 }
 
+/* The npm download count under the command, written in when the site is published. Its number
+   keeps the width of the final one while it counts up, so the centred line does not move: as many
+   characters as the final number (--digits), at 0.62em each, a little over a digit's advance in
+   common monospaced faces, so the width holds whichever face is drawn while the web font loads. */
+.downloads {
+  margin-top: -8px;
+  color: var(--ink-2);
+  font-size: 0.9375rem;
+}
+
+.downloads-n {
+  display: inline-block;
+  width: calc(var(--digits, 1) * 0.62em);
+  color: var(--ink);
+  font: 600 1.0625rem var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .copy {
   flex: none;
   min-height: 40px;
@@ -1097,19 +1116,6 @@ kbd {
 }
 
 /* Stats */
-
-/* The npm download count, above the four facts; it is added when the site is published. The number
-   sits above its label, so nothing moves while it counts up. */
-.stat-live {
-  display: grid;
-  gap: 12px;
-  padding-block: 28px 32px;
-  border-top: 1px solid var(--ink);
-}
-
-.stat-live .stat-label {
-  max-width: 60ch;
-}
 
 .stats-grid {
   display: grid;

@@ -64,6 +64,8 @@
         <code>npx reaproof</code>
         <button class="copy" type="button" data-copy="npx reaproof">Copy</button>
       </div>
+      <!-- Filled in and shown when the site is published, from npm's own count: docs/tools/site-downloads.mjs -->
+      <p class="downloads" data-downloads hidden><span class="downloads-n" data-count aria-hidden="true"></span><span class="sr-only" data-count-text></span> downloads from npm so far</p>
       <p class="fine">It reads first and asks before it changes anything. Nothing to install, nothing to configure.</p>
       <div class="hero-actions">
         <a class="btn btn-primary" href="#start">Get started</a>
@@ -162,13 +164,6 @@
 
   <!-- Stats -->
   <section class="stats" aria-label="Reaproof in numbers">
-    <!-- Filled in and shown when the site is published, from npm's own count: docs/tools/site-downloads.mjs -->
-    <div class="wrap" data-downloads hidden>
-      <div class="stat-live">
-        <p class="stat-n"><span data-count aria-hidden="true"></span><span class="sr-only" data-count-text></span></p>
-        <p class="stat-label">downloads from npm since the first release, as npm counts them. Updated daily.</p>
-      </div>
-    </div>
     <div class="wrap stats-grid">
       <div class="stat">
         <p class="stat-n">1</p>
