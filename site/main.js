@@ -146,9 +146,9 @@ if (demo && canPlay) {
   observer.observe(demo);
 }
 
-// The npm download count, written into the page when it is published, counts up from zero once it
-// comes into view. Screen readers get the number from its own hidden copy. Without the observer,
-// or when less motion is asked for, it stands as written.
+// The npm download count under the command, written into the page when it is published, counts up
+// from zero as soon as it is in view, on most screens at once. Screen readers get the number from
+// its own hidden copy. Without the observer, or when less motion is asked for, it stands as written.
 
 const COUNT_MS = 1200;
 const count = document.querySelector('[data-downloads]:not([hidden]) [data-count]');
@@ -160,8 +160,10 @@ if (count && 'IntersectionObserver' in window && !prefersLessMotion) {
     (entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return;
       observer.disconnect();
-      const start = performance.now();
+      // Timed from the first frame: a frame's time can be a moment earlier than this callback.
+      let start;
       const step = (now) => {
+        start ??= now;
         const progress = Math.min(1, (now - start) / COUNT_MS);
         // Fast at first and slowing into the number, as a counter settles.
         count.textContent = Math.round(target * (1 - (1 - progress) ** 3)).toLocaleString('en-US');
@@ -169,7 +171,6 @@ if (count && 'IntersectionObserver' in window && !prefersLessMotion) {
       };
       requestAnimationFrame(step);
     },
-    { rootMargin: '0px 0px -20% 0px' },
   );
   observer.observe(count);
 }
