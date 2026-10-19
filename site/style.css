@@ -1098,6 +1098,19 @@ kbd {
 
 /* Stats */
 
+/* The npm download count, above the four facts; it is added when the site is published. The number
+   sits above its label, so nothing moves while it counts up. */
+.stat-live {
+  display: grid;
+  gap: 12px;
+  padding-block: 28px 32px;
+  border-top: 1px solid var(--ink);
+}
+
+.stat-live .stat-label {
+  max-width: 60ch;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

@@ -145,3 +145,31 @@ if (demo && canPlay) {
   );
   observer.observe(demo);
 }
+
+// The npm download count, written into the page when it is published, counts up from zero once it
+// comes into view. Screen readers get the number from its own hidden copy. Without the observer,
+// or when less motion is asked for, it stands as written.
+
+const COUNT_MS = 1200;
+const count = document.querySelector('[data-downloads]:not([hidden]) [data-count]');
+
+if (count && 'IntersectionObserver' in window && !prefersLessMotion) {
+  const target = Number(count.dataset.count);
+  count.textContent = '0';
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      const start = performance.now();
+      const step = (now) => {
+        const progress = Math.min(1, (now - start) / COUNT_MS);
+        // Fast at first and slowing into the number, as a counter settles.
+        count.textContent = Math.round(target * (1 - (1 - progress) ** 3)).toLocaleString('en-US');
+        if (progress < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    },
+    { rootMargin: '0px 0px -20% 0px' },
+  );
+  observer.observe(count);
+}
