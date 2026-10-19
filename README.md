@@ -28,7 +28,7 @@ npx reaproof
 
 1. **It reads, and changes nothing.** In a JavaScript project folder it finds the build output by name (`dist`, `.next/static`, `out`, `build` and the like). Of a server-rendering build, as SvelteKit, Astro, React Router and Nuxt make one, it reads what browsers load and what the server puts into every page, not the server's own code. Anything else it reads as given: a folder, an app, a program or an archive.
 2. **It rates and explains.** The rating comes first. Each finding follows, worst first, with what it exposes and how to close it. Right under the count of files read, it says what it did not read. At a terminal it also opens the same result as a page in your browser.
-3. **It offers the fix it can make.** It lists the source map files it can take out and, after a `y`, moves them out of your output into a backup. `npx reaproof undo` puts them back.
+3. **It offers the fix it can make.** It lists the source map files it can take out and, after a `y`, moves them out of your output into a backup. `npx reaproof undo` puts them back. Without a terminal, as in an agent's shell or in CI, nothing is asked: `reaproof fix` lists the files, changes nothing and exits with 2 until it is run with `--yes`.
 4. **You close the rest and run it again.** Each finding names the setting to change. A finding that is gone is fixed. The report ends with what to do next.
 
 ### What the rating means

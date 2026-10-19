@@ -1528,6 +1528,8 @@ export function createReporter(language) {
     /**
      * What the result means and what to do about it, in words. It goes into the JSON output
      * so that an AI agent can act on a result without having been taught this tool first.
+     * Of a deployed site it says what the report says there: the fix cannot take out what a
+     * site serves, only its maps were looked at, and a new deploy is the way on.
      */
     explain(result) {
       const rules = {};
@@ -1539,8 +1541,11 @@ export function createReporter(language) {
           explanation: t.rules[rule].body(summarizeRule(findings).totals),
           fixCommand: findings.some(isFixable) ? FIX_COMMAND : null,
         };
+        if (result.isDeployed && STANDALONE_MAP_RULES.has(rule)) rules[rule].fixInstead = t.deployedHint;
       }
-      return { risk: t.riskSummaries[result.risk], unread: listUnread(result), rules, limits: listLimits(result) };
+      const explained = { risk: t.riskSummaries[result.risk], unread: listUnread(result), rules, limits: listLimits(result) };
+      if (!result.isDeployed) return explained;
+      return { ...explained, limits: [...explained.limits, t.deployedScope], next: nextSteps(result) };
     },
 
     /** @returns {string | null} the line a text answer closes with when the command does not end with 0 */

@@ -2,6 +2,10 @@
 
 What changed in each release published to npm, newest first.
 
+## Unreleased (not published yet)
+
+- Says in the JSON of a deployed site what the report says there: the fix cannot take out what a site serves, so turn maps off in the build settings and deploy again (`fixInstead`, beside a `fixCommand` of `null`), the check looked at source maps alone (the last line of `limits`), and what to do next (`next`). 0.9.0 told an agent only that there was no fix command.
+
 ## 0.9.0 (2026-10-18)
 
 - Opens the result as a page in your browser when you run it at a terminal, for whoever a terminal report says little to: the rating large on its scale, what to do next with the fix it can make first, then each kind of leak as a card with where it was found and how to fix it, in the words the terminal uses. After `fix`, the page opens again with the rating before the fix struck out, the build setting that keeps maps away, and how to undo it. On 45 test targets every page shows the rating, the leak counts and the items of each kind that the JSON holds.
